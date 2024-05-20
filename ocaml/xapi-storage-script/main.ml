@@ -1501,6 +1501,35 @@ let bind ~volume_script_dir =
     |> wrap
   in
   S.DP.destroy2 dp_destroy2 ;
+  let vdi_enable_cbt_impl (dbg : string) (sr : Storage_interface.Sr.t) (vdi : Storage_interface.Vdi.t) =
+    (* let open Deferred.Result.Monad_infix in *)
+    (* do you need to find an attached SR before doing this? *)
+    (* can this throw? do we catch and wrap in an RPC err type? *)
+    (* return (Ok (Storage_client.Client.VDI.enable_cbt dbg sr vdi)) *)
+    (* |> wrap *)
+    let sr = Storage_interface.Sr.string_of sr in
+    let vdi = Storage_interface.Vdi.string_of vdi in
+    return_volume_rpc (fun () ->
+        Volume_client.enable_cbt volume_rpc dbg sr vdi)
+    |> wrap
+  in
+  let vdi_disable_cbt_impl dbg sr vdi =
+    let sr = Storage_interface.Sr.string_of sr in
+    let vdi = Storage_interface.Vdi.string_of vdi in
+    return_volume_rpc (fun () ->
+        Volume_client.disable_cbt volume_rpc dbg sr vdi)
+    |> wrap
+  in
+  let vdi_list_changed_blocks_impl dbg sr vdi vdi' =
+    let sr = Storage_interface.Sr.string_of sr in
+    let vdi = Storage_interface.Vdi.string_of vdi in
+    let vdi' = Storage_interface.Vdi.string_of vdi' in
+    return_volume_rpc (fun () ->
+        Volume_client.list_changed_blocks volume_rpc dbg sr vdi vdi' 0L 0
+      )
+    >>>= (fun r -> Deferred.Result.return r.Xapi_storage.Control.bitmap)
+    |> wrap
+  in
   let sr_list _dbg =
     Attached_SRs.list () >>>= (fun srs -> Deferred.Result.return srs) |> wrap
   in
@@ -1514,13 +1543,11 @@ let bind ~volume_script_dir =
   S.DATA.MIRROR.receive_start (u "DATA.MIRROR.receive_start") ;
   S.UPDATES.get (u "UPDATES.get") ;
   S.SR.update_snapshot_info_dest (u "SR.update_snapshot_info_dest") ;
-  S.VDI.data_destroy (u "VDI.data_destroy") ;
   S.DATA.MIRROR.list (u "DATA.MIRROR.list") ;
   S.TASK.stat (u "TASK.stat") ;
   S.VDI.remove_from_sm_config (u "VDI.remove_from_sm_config") ;
   S.DP.diagnostics (u "DP.diagnostics") ;
   S.TASK.destroy (u "TASK.destroy") ;
-  S.VDI.list_changed_blocks (u "VDI.list_changed_blocks") ;
   S.DP.destroy (u "DP.destroy") ;
   S.VDI.add_to_sm_config (u "VDI.add_to_sm_config") ;
   S.VDI.similar_content (u "VDI.similar_content") ;
@@ -1529,7 +1556,10 @@ let bind ~volume_script_dir =
   S.DATA.MIRROR.receive_finalize (u "DATA.MIRROR.receive_finalize") ;
   S.DP.create (u "DP.create") ;
   S.VDI.set_content_id (u "VDI.set_content_id") ;
-  S.VDI.disable_cbt (u "VDI.disable_cbt") ;
+  S.VDI.enable_cbt vdi_enable_cbt_impl ;
+  S.VDI.disable_cbt vdi_disable_cbt_impl ;
+  S.VDI.list_changed_blocks vdi_list_changed_blocks_impl ;
+  S.VDI.data_destroy (u "VDI.data_destroy") ;
   S.DP.attach_info (u "DP.attach_info") ;
   S.TASK.cancel (u "TASK.cancel") ;
   S.VDI.attach (u "VDI.attach") ;
@@ -1538,7 +1568,6 @@ let bind ~volume_script_dir =
   S.DATA.MIRROR.stat (u "DATA.MIRROR.stat") ;
   S.TASK.list (u "TASK.list") ;
   S.VDI.get_url (u "VDI.get_url") ;
-  S.VDI.enable_cbt (u "VDI.enable_cbt") ;
   S.DATA.MIRROR.start (u "DATA.MIRROR.start") ;
   S.Policy.get_backend_vm (u "Policy.get_backend_vm") ;
   S.DATA.copy_into (u "DATA.copy_into") ;
