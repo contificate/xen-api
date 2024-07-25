@@ -731,6 +731,67 @@ module Caching = struct
     ; subject_name: string
     ; rbac_permissions: string list
   }
+
+  module type EXTERNAL_AUTH_CACHE =
+    Helpers.AuthenticationCache.S
+      with type user = string
+       and type password = string
+       and type session = external_auth_result
+
+  module DummyExternalAuthCache : EXTERNAL_AUTH_CACHE = struct
+    type user = string
+
+    type password = string
+
+    type session = external_auth_result
+
+    type t = unit
+
+    let create ~size:_ = ()
+
+    let cache _ _ _ _ = ()
+
+    let cached _ _ _ = None
+  end
+
+  let create_salt =
+    let module MRNG = Mirage_crypto_rng in
+    let g = MRNG.Fortuna.create () in
+    let initial_seed =
+      let r = Random.int64 Int64.max_int in
+      let bs = Bytes.create 8 in
+      Bytes.set_int64_le bs 0 r ; Cstruct.of_bytes bs
+    in
+    MRNG.Fortuna.reseed ~g initial_seed ;
+    fun () -> MRNG.Fortuna.generate ~g 8
+
+  module AuthenticatedResult = struct
+    type key = string
+
+    type salt = Cstruct.t
+
+    type digest = Cstruct.t
+
+    type secret = external_auth_result
+
+    type t = digest * salt * secret
+
+    let create digest salt secret = (digest, salt, secret)
+
+    let read ((_, _, _) as t) = t
+
+    let create_salt = create_salt
+
+    let hash key salt =
+      let password = Cstruct.of_string key in
+      let count = 10_000 in
+      Pbkdf.pbkdf2 ~prf:`SHA256 ~password ~salt ~count ~dk_len:32l
+
+    let equal_digest = Cstruct.equal
+  end
+
+  module AuthenticationCache : EXTERNAL_AUTH_CACHE =
+    Helpers.AuthenticationCache.Make (String) (AuthenticatedResult)
 end
 
 (* CP-714: Modify session.login_with_password to first try local super-user
