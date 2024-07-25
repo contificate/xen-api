@@ -792,6 +792,63 @@ module Caching = struct
 
   module AuthenticationCache : EXTERNAL_AUTH_CACHE =
     Helpers.AuthenticationCache.Make (String) (AuthenticatedResult)
+
+  (** Decide which cache implementation to use at runtime *)
+  let choose_authentication_cache () : (module EXTERNAL_AUTH_CACHE) =
+    if !Xapi_globs.external_authentication_cache_enabled then
+      (module AuthenticationCache)
+    else
+      (module DummyExternalAuthCache)
+
+  (** Modular record container to store the concrete choice of cache
+      implementation. *)
+  module type CacheS = sig
+    module Impl : EXTERNAL_AUTH_CACHE
+
+    val impl : Impl.t
+  end
+
+  (** Store the concrete caching implementation. *)
+  let cache : (module CacheS) option ref = ref None
+
+  let lock = Mutex.create ()
+
+  (** Initialise cache whose underlying implementation is dependent
+      on whether external caching is enabled. *)
+  let initialise_cache () : (module CacheS) =
+    let module Choice =
+      (val choose_authentication_cache () : EXTERNAL_AUTH_CACHE)
+    in
+    let size = !Xapi_globs.external_authentication_cache_size in
+    let module R : CacheS = struct
+      module Impl = Choice
+
+      let impl = Impl.create ~size
+    end in
+    cache := Some (module R) ;
+    (module R)
+
+  let get_cache () : (module CacheS) =
+    match !cache with Some c -> c | _ -> initialise_cache ()
+
+  let memoize user password ~f =
+    let lookup () =
+      let module Cache = (val get_cache () : CacheS) in
+      Cache.(Impl.cached impl user password)
+    in
+    let entry = with_lock lock lookup in
+    match entry with
+    | Some result ->
+        result
+    | _ ->
+        (* We should not be holding the lock during the slow path. *)
+        let result = f () in
+        let insert () =
+          let module Cache = (val get_cache () : CacheS) in
+          Cache.(Impl.cache impl user password result)
+        in
+        (* Reacquire lock and cache as the underlying implementation could have been changed. *)
+        with_lock lock insert ; result
 end
 
 (* CP-714: Modify session.login_with_password to first try local super-user
@@ -1151,7 +1208,7 @@ let login_with_password ~__context ~uname ~pwd ~version:_ ~originator =
                     ; subject_name
                     ; rbac_permissions
                     } =
-                query_external_auth ()
+                Caching.memoize uname pwd ~f:query_external_auth
               in
               login_no_password_common ~__context ~uname:(Some uname)
                 ~originator
