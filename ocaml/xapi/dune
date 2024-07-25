@@ -122,9 +122,11 @@
     message-switch-core
     message-switch-unix
     mirage-crypto
+    mirage-crypto-rng
     mtime
     mtime.clock.os
     pam
+    pbkdf
     pciutil
     pci
     psq
