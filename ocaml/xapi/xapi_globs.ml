@@ -1031,6 +1031,10 @@ let cert_thumbprint_header_response =
 
 let external_authentication_expiry_ms = ref 300_000
 
+let external_authentication_cache_enabled = ref false
+
+let external_authentication_cache_size = ref 50
+
 let observer_endpoint_http_enabled = ref false
 
 let observer_endpoint_https_enabled = ref false
@@ -1593,6 +1597,22 @@ let other_options =
     , Arg.Set disable_webserver
     , (fun () -> string_of_bool !disable_webserver)
     , "Disable the host webserver"
+    )
+  ; ( "enable-external-authentication-cache"
+    , Arg.Set external_authentication_cache_enabled
+    , (fun () -> string_of_bool !external_authentication_cache_enabled)
+    , "Enable caching of external authentication decisions"
+    )
+  ; ( "external-authentication-expiry-ms"
+    , Arg.Int (fun ms -> external_authentication_expiry_ms := ms)
+    , (fun () -> string_of_int !external_authentication_expiry_ms)
+    , "Specify how long externally authenticated login decisions should be \
+       cached"
+    )
+  ; ( "external-authentication-cache-size"
+    , Arg.Int (fun sz -> external_authentication_cache_size := sz)
+    , (fun () -> string_of_int !external_authentication_cache_size)
+    , "Specify the maximum capacity of the external authentication cache"
     )
   ]
 
