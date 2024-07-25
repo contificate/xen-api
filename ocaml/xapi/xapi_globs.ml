@@ -1029,6 +1029,8 @@ let cert_thumbprint_header_value_sha1 = ref "sha-1:master"
 let cert_thumbprint_header_response =
   ref "x-xenapi-response-host-certificate-thumbprint"
 
+let external_authentication_expiry_ms = ref 300_000
+
 let observer_endpoint_http_enabled = ref false
 
 let observer_endpoint_https_enabled = ref false
