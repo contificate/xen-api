@@ -1,3 +1,4 @@
+# allows commits to be retroactively signed-off
 allowRemediationCommits:
   individual: true
   thirdParty: true
