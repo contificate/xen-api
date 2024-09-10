@@ -808,7 +808,14 @@ module Caching = struct
       | Some _ as extant ->
           extant
       | _ ->
-          let auth_cache = AuthenticationCache.create ~size:capacity in
+          let expiry =
+            Db.Pool.get_ext_auth_cache_expiry ~__context ~self:pool
+            |> Int64.abs
+            |> Int64.to_float
+            |> Clock.Timer.s_to_span
+            |> Option.value ~default:Mtime.Span.(300 * s)
+          in
+          let auth_cache = AuthenticationCache.create ~size:capacity ~expiry in
           let instance = Some auth_cache in
           cache := instance ;
           instance

@@ -2262,7 +2262,7 @@ module AuthenticationCache = struct
 
     type session
 
-    val create : size:int -> t
+    val create : size:int -> expiry:Mtime.span -> t
 
     val cache : t -> user -> password -> session -> unit
 
@@ -2282,13 +2282,19 @@ module AuthenticationCache = struct
 
     type session = Secret.secret
 
-    type t = {cache: Q.t; mutex: Mutex.t; elapsed: Mtime_clock.counter}
+    type t = {
+        cache: Q.t
+      ; mutex: Mutex.t
+      ; elapsed: Mtime_clock.counter
+      ; expiry: Mtime.span
+    }
 
-    let create ~size =
+    let create ~size ~expiry =
       {
         cache= Q.create ~capacity:size
       ; mutex= Mutex.create ()
       ; elapsed= Mtime_clock.counter ()
+      ; expiry
       }
 
     let with_lock m f =
@@ -2304,7 +2310,7 @@ module AuthenticationCache = struct
       let@ () = with_lock t.mutex in
       let expires =
         let elapsed = Mtime_clock.count t.elapsed in
-        let timeout = !Xapi_globs.external_authentication_expiry in
+        let timeout = t.expiry in
         Mtime.Span.add elapsed timeout
       in
       let salt = Secret.create_salt () in
