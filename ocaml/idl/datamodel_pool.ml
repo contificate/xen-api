@@ -1488,6 +1488,17 @@ let t =
         ; field ~qualifier:StaticRO ~ty:Int ~default_value:(Some (VInt 1L))
             ~lifecycle:[] "ext_auth_max_threads"
             "Maximum number of threads to use for external (AD) authentication"
+        ; field ~qualifier:RW ~ty:Bool ~default_value:(Some (VBool false))
+            ~lifecycle:[] "ext_auth_cache_enabled"
+            "Specifies whether external authentication caching is enabled for \
+             this pool or not"
+        ; field ~qualifier:RW ~ty:Int ~default_value:(Some (VInt 50L))
+            ~lifecycle:[] "ext_auth_cache_size"
+            "Maximum capacity of external authentication cache"
+        ; field ~qualifier:RW ~ty:Int ~default_value:(Some (VInt 300L))
+            ~lifecycle:[] "ext_auth_cache_expiry"
+            "Specifies how long external authentication entries should be \
+             cached for (seconds)"
         ; field ~lifecycle:[] ~qualifier:DynamicRO ~ty:(Ref _secret)
             ~default_value:(Some (VRef null_ref)) "telemetry_uuid"
             "The UUID of the pool for identification of telemetry data"
