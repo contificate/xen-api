@@ -111,7 +111,7 @@ let operation (obj : obj) (x : message) =
       Printf.sprintf "[%s]" (String.concat "; " string_args)
   in
   let name_pattern_match =
-    Printf.sprintf {|| "%s" | "%s" -> |} wire_name alternative_wire_name
+    Printf.sprintf {|| "%s" -> |} alternative_wire_name
   in
   (* Lookup the various fields from the constructor record *)
   let from_ctor_record =
@@ -477,12 +477,13 @@ let gen_module api : O.Module.t =
                    (\"dispatch:\"^__call^\"\") ~http_other_config \
                    ?subtask_of:(Option.map Ref.of_string subtask_of) (fun \
                    __context ->"
+                ; {|let __normalised = Str.(replace_first (regexp "\\.") "_") __call in|}
                 ; "Server_helpers.dispatch_exn_wrapper (fun () -> (match \
-                   __call with "
+                   __normalised with "
                 ]
                @ List.concat_map obj all_objs
                @ [
-                   "| \"system.listMethods\" -> "
+                   "| \"system_listMethods\" -> "
                  ; "  success (rpc_of_string_set ["
                  ]
                @ (let objmsgs obj =
@@ -503,7 +504,7 @@ let gen_module api : O.Module.t =
                @ [
                    " ])"
                  ; "| func -> "
-                 ; "  if (try Scanf.sscanf func \"system.isAlive:%s\" (fun _ \
+                 ; "  if (try Scanf.sscanf func \"system_isAlive:%s\" (fun _ \
                     -> true) with _ -> false)"
                  ; "  then Rpc.success (List.hd __params)"
                  ; "  else begin"
