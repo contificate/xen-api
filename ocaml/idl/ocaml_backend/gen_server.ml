@@ -75,21 +75,21 @@ let operation (obj : obj) (x : message) =
   let result_marshaller =
     match (x.msg_custom_marshaller, x.msg_result) with
     | true, _ ->
-        "(fun x -> x)"
+        "Fun.id"
     | false, Some (ty, _) ->
-        Printf.sprintf "(fun x -> rpc_of_%s x)" (OU.alias_of_ty ty)
+        Printf.sprintf "rpc_of_%s" (OU.alias_of_ty ty)
     | false, None ->
-        "(fun _ -> Rpc.String \"\")"
+        "(Fun.const (Rpc.String \"\"))"
   in
   (* Result unmarshaller converts the result to a rpc type for the Task table *)
   let result_unmarshaller =
     match (x.msg_custom_marshaller, x.msg_result) with
     | true, _ ->
-        "(fun x -> x)"
+        "Fun.id"
     | false, Some (ty, _) ->
-        Printf.sprintf "(fun x -> %s_of_rpc x)" (OU.alias_of_ty ty)
+        Printf.sprintf "%s_of_rpc" (OU.alias_of_ty ty)
     | false, None ->
-        "(fun _ -> ())"
+        "(Fun.const ())"
   in
   let wire_name = DU.wire_name ~sync:true obj x in
   let alternative_wire_name = DU.alternative_wire_name ~sync:true obj x in
