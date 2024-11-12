@@ -8,35 +8,6 @@
       -output %{targets}))
 )
 
-(rule
-  (targets db_actions.ml)
-  (deps
-    ../idl/ocaml_backend/gen_api_main.exe
-  )
-  (action
-    (run %{deps} -filterinternal false -filter nothing -mode db -output
-      %{targets}))
-)
-
-(rule
-  (targets custom_actions.ml)
-  (deps
-    ../idl/ocaml_backend/gen_api_main.exe
-  )
-  (action
-    (run %{deps} -filterinternal true -filter closed -mode actions -output
-      %{targets}))
-)
-
-(rule
-  (targets rbac_static.ml)
-  (deps
-    ../idl/ocaml_backend/gen_api_main.exe
-  )
-  (action
-    (run %{deps} -filterinternal true -filter closed -mode rbac -output
-      %{targets}))
-)
 
 (rule
   (targets rbac_static.csv)
@@ -54,52 +25,12 @@
   (files rbac_static.csv)
 )
 
-
-(library
-  (name xapi_internal_minimal)
-  (modules context custom_actions xapi_globs server_helpers session_check rbac rbac_audit db_actions taskHelper eventgen locking_helpers exnHelper rbac_static xapi_role xapi_extensions db)
-  (modes best)
-  (wrapped false)
-  (libraries
-    http_lib
-    httpsvr
-    ipaddr
-    xapi-types
-    xapi_database
-    mtime
-    tracing
-    uuid
-    rpclib.core
-    threads.posix
-    fmt
-    clock
-    astring
-    stunnel
-    sexplib0
-    sexplib
-    sexpr
-    forkexec
-    xapi-idl
-    xapi_aux
-    xapi-stdext-std
-    xapi-stdext-date
-    xapi-stdext-pervasives
-    xapi-backtrace
-    xapi-datamodel
-    xapi-consts
-    xapi_version
-    xapi-stdext-threads
-    xapi-stdext-unix
-    rpclib.xml
-    xapi-log)
-)
-
 (library
   (name xapi_internal)
   (wrapped false)
   (modes best)
   (modules (:standard \
-    xapi_main server api_server xapi custom_actions context xapi_globs server_helpers session_check rbac rbac_audit rbac_static db_actions taskHelper eventgen locking_helpers exnHelper xapi_role xapi_extensions db))
+    xapi_main server api_server xapi))
   (libraries
     angstrom
     astring

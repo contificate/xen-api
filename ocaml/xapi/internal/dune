@@ -1,0 +1,67 @@
+(rule
+  (target db_actions.ml)
+  (deps
+    (:gen ../../idl/ocaml_backend/gen_api_main.exe)
+  )
+  (action
+    (run %{gen} -filterinternal false -filter nothing -mode db -output
+      %{target}))
+)
+
+(rule
+  (target custom_actions.ml)
+  (deps
+    (:gen ../../idl/ocaml_backend/gen_api_main.exe)
+  )
+  (action
+    (run %{gen} -filterinternal true -filter closed -mode actions -output
+      %{target}))
+)
+
+(rule
+  (target rbac_static.ml)
+  (deps
+    (:gen ../../idl/ocaml_backend/gen_api_main.exe)
+  )
+  (action
+    (run %{gen} -filterinternal true -filter closed -mode rbac -output
+      %{target}))
+)
+
+(library
+  (name xapi_internal_minimal)
+  (modes best)
+  (wrapped false)
+  (libraries
+    http_lib
+    httpsvr
+    ipaddr
+    xapi-types
+    xapi_database
+    mtime
+    tracing
+    uuid
+    rpclib.core
+    threads.posix
+    fmt
+    clock
+    astring
+    stunnel
+    sexplib0
+    sexplib
+    sexpr
+    forkexec
+    xapi-idl
+    xapi_aux
+    xapi-stdext-std
+    xapi-stdext-date
+    xapi-stdext-pervasives
+    xapi-backtrace
+    xapi-datamodel
+    xapi-consts
+    xapi_version
+    xapi-stdext-threads
+    xapi-stdext-unix
+    rpclib.xml
+    xapi-log)
+)
