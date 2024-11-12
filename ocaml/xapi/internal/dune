@@ -29,26 +29,32 @@
 )
 
 (library
-  (name xapi_internal_minimal)
+  (name xapi_internal_context)
+  (modules eventgen context xapi_globs)
   (modes best)
   (wrapped false)
   (libraries
-    http_lib
-    httpsvr
-    ipaddr
-    xapi-types
-    xapi_database
-    mtime
-    tracing
-    uuid
-    rpclib.core
+    ; external
     threads.posix
+    ipaddr
+    mtime
+    rpclib.core
     fmt
-    clock
     astring
-    stunnel
     sexplib0
     sexplib
+    xapi-backtrace
+    rpclib.xml
+
+    ; internal
+    http_lib
+    httpsvr
+    xapi-types
+    xapi_database
+    tracing
+    uuid
+    clock
+    stunnel
     sexpr
     forkexec
     xapi-idl
@@ -56,12 +62,51 @@
     xapi-stdext-std
     xapi-stdext-date
     xapi-stdext-pervasives
-    xapi-backtrace
     xapi-datamodel
     xapi-consts
     xapi_version
     xapi-stdext-threads
     xapi-stdext-unix
+    xapi-log
+  )
+)
+
+(library
+  (name xapi_internal_minimal)
+  (modules (:standard \ eventgen context xapi_globs))
+  (modes best)
+  (wrapped false)
+  (libraries
+    ; external
+    threads.posix
+    rpclib.core
+    fmt
+    astring
+    sexplib0
+    sexplib
+    xapi-backtrace
     rpclib.xml
-    xapi-log)
+
+    ; internal
+    (re_export xapi_internal_context)
+    http_lib
+    xapi-types
+    xapi_database
+    uuid
+    clock
+    stunnel
+    sexpr
+    forkexec
+    xapi-idl
+    xapi_aux
+    xapi-stdext-std
+    xapi-stdext-date
+    xapi-stdext-pervasives
+    xapi-datamodel
+    xapi-consts
+    xapi_version
+    xapi-stdext-threads
+    xapi-stdext-unix
+    xapi-log
+  )
 )
