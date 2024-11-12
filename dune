@@ -14,6 +14,42 @@
   (name configure)
   (libraries dune-configurator findlib cmdliner unix))
 
+(subdir ocaml/xapi-generated
+  (rule
+    (target db-actions-dune)
+    (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+    (action
+      (with-stdout-to %{target}
+      (run %{gen} -filterinternal false -filter nothing -mode db-dune)))
+  )
+)
+
+(subdir ocaml/xapi-db-actions
+  ; Explicitly list static dependencies of the DB action modules
+  (rule
+    (target Xapi_db_record_types.ml)
+    (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+    (action
+      (with-stdout-to %{target} (run %{gen} -filterinternal false -filter nothing -mode db-action-records))))
+  (rule
+    (target DM_to_String.ml)
+    (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+    (action
+      (with-stdout-to %{target} (run %{gen} -filterinternal false -filter nothing -mode dm-to-string))))
+  (rule
+    (target String_to_DM.ml)
+    (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+    (action
+      (with-stdout-to %{target} (run %{gen} -filterinternal false -filter nothing -mode string-to-dm))))
+
+  ; All the dynamically generated rules for DB action modules.
+  (dynamic_include ../xapi-generated/db-actions-dune)
+  (library
+    (name xapi_db_actions)
+    (modes best)
+    (libraries xapi_database xapi-log xapi-types rpclib.core clock xapi_internal_context))
+)
+
 ; Can still be used for dependencies, but dune won't scan these dirs
 ; for dune files
 (data_only_dirs doc scripts python3 .vscode)

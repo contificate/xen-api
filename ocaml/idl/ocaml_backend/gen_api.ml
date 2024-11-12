@@ -459,9 +459,28 @@ let gen_custom_actions highapi =
        ]
     )
 
-open Gen_db_actions
+let gen_db_actions () =
+  let prelude =
+    {|
+[@@@ocaml.warning "-6-27-33"]
 
-let gen_db_actions highapi =
+open Xapi_db_actions
+include Xapi_db_record_types
+include DM_to_String
+include String_to_DM
+  |}
+  in
+  print prelude ;
+  print "module DB_Action = struct" ;
+  for i = 0 to Gen_db_actions.bucket_count - 1 do
+    print (Printf.sprintf "  include Db_action_%d.DB_Action_%d" i i)
+  done ;
+  print "end"
+
+let obj_in_database obj = obj.DT.in_database
+
+let gen_db_actions_record_types highapi =
+  let open Gen_db_actions in
   let highapi_in_db =
     Dm_api.filter
       (fun obj -> obj.DT.in_database)
@@ -473,23 +492,27 @@ let gen_db_actions highapi =
   let only_records =
     List.filter (function DT.Record _ -> true | _ -> false) all_types_in_db
   in
-  List.iter (List.iter print)
-    (between [""]
-       [
-         [{|[@@@ocaml.warning "-6-27-33"]|}]
-       ; ["open API"]
-       ; (* These records have the hidden fields inside.
-            This excludes records not stored in the database, which must not
-            have hidden fields. *)
-         gen_record_type ~with_module:false highapi
-           (toposort_types highapi only_records)
-       ; (* NB record types are ignored by dm_to_string and string_to_dm *)
-         O.Module.strings_of (dm_to_string all_types_in_db)
-       ; O.Module.strings_of (string_to_dm all_types_in_db)
-       ; O.Module.strings_of (db_action highapi_in_db)
-       ]
-    @ List.map O.Module.strings_of (Gen_db_check.all highapi_in_db)
-    @ []
-    )
+  print_endline "open API\n" ;
+  gen_record_type ~with_module:false highapi
+    (toposort_types highapi only_records)
+  |> List.iter print_endline
+
+let gen_types_common f api =
+  let api_in_db = Dm_api.filter_by ~obj:obj_in_database api in
+  let all_types_in_db = all_types_of api_in_db in
+  let md = f all_types_in_db in
+  O.Module.strings_of md |> List.iter print_endline
+
+let gen_dm_to_string = gen_types_common Gen_db_actions.dm_to_string
+
+let gen_string_to_dm = gen_types_common Gen_db_actions.string_to_dm
+
+let gen_db_actions_dune highapi =
+  let api_in_db = Dm_api.filter_by ~obj:obj_in_database highapi in
+  Gen_db_actions.db_action_dune api_in_db
+
+let gen_db_actions_bucket highapi buckets index =
+  let api_in_db = Dm_api.filter_by ~obj:obj_in_database highapi in
+  Gen_db_actions.gen_db_action_bucket api_in_db buckets index
 
 let gen_rbac highapi = print (Gen_rbac.gen_permissions_of_static_roles highapi)

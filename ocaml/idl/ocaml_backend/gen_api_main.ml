@@ -68,6 +68,10 @@ let set_gendebug () = Gen_server.enable_debugging := true
 
 let mode = ref None
 
+let buckets = ref None
+
+let index = ref None
+
 let _ =
   Arg.parse
     [
@@ -79,6 +83,11 @@ let _ =
             ; "api"
             ; "utils"
             ; "db"
+            ; "db-dune"
+            ; "db-action"
+            ; "db-action-records"
+            ; "string-to-dm"
+            ; "dm-to-string"
             ; "actions"
             ; "sql"
             ; "rbac"
@@ -113,6 +122,11 @@ let _ =
           )
       , "Output to the specified file"
       )
+    ; ( "-buckets"
+      , Arg.Int (fun i -> buckets := Some i)
+      , "Specify number of buckets"
+      )
+    ; ("-index", Arg.Int (fun i -> index := Some i), "Specify bucket index")
     ]
     (fun x -> Printf.eprintf "Ignoring argument: %s\n" x)
     "Generate ocaml code from the datamodel. See -help" ;
@@ -129,7 +143,22 @@ let _ =
   | Some "server" ->
       Gen_api.gen_server api
   | Some "db" ->
-      Gen_api.gen_db_actions api
+      Gen_api.gen_db_actions ()
+  | Some "string-to-dm" ->
+      Gen_api.gen_string_to_dm api
+  | Some "dm-to-string" ->
+      Gen_api.gen_dm_to_string api
+  | Some "db-dune" ->
+      Gen_api.gen_db_actions_dune api
+  | Some "db-action-records" ->
+      Gen_api.gen_db_actions_record_types api
+  | Some "db-action" -> (
+    match (!buckets, !index) with
+    | Some buckets, Some index ->
+        Gen_api.gen_db_actions_bucket api buckets index
+    | _ ->
+        failwith "Must specify both -buckets  and -index with -mode db-action"
+  )
   | Some "actions" ->
       Gen_api.gen_custom_actions api
   | Some "rbac" ->

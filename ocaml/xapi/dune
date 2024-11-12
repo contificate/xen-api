@@ -32,6 +32,7 @@
   (modules (:standard \
     xapi_main server api_server xapi))
   (libraries
+    xapi_db_actions
     angstrom
     astring
     cstruct
@@ -151,7 +152,7 @@
   (name xapi_internal_server_only)
   (modes best)
   (modules server)
-  (libraries xapi_internal_minimal http_lib rpclib.core xapi-types xapi-log xapi-stdext-encodings xapi-consts xapi-backtrace xapi-stdext-date rpclib.json)
+  (libraries xapi_db_actions xapi_internal_minimal http_lib rpclib.core xapi-types xapi-log xapi-stdext-encodings xapi-consts xapi-backtrace xapi-stdext-date rpclib.json)
   (wrapped false)
 )
 
@@ -161,6 +162,7 @@
   (wrapped false)
   (modules api_server xapi)
   (libraries
+    xapi_db_actions
     forkexec
     http_lib
     httpsvr

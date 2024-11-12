@@ -89,6 +89,7 @@
 
     ; internal
     (re_export xapi_internal_context)
+    (re_export xapi_db_actions)
     http_lib
     xapi-types
     xapi_database

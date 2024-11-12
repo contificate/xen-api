@@ -156,6 +156,10 @@ let filter (obj : obj -> bool) (field : field -> bool)
   in
   rebuild system relations
 
+let filter_by ?(obj = fun _ -> true) ?(field = fun _ -> true)
+    ?(msg = fun _ -> true) =
+  filter obj field msg
+
 let map (obj : obj -> obj) (field : string -> field -> field)
     (message : message -> message) ((system, relations) : api) : api =
   let system =

@@ -50,11 +50,7 @@ let make_db_api =
 
 (* Only these types are actually marshalled into the database: *)
 let type_marshalled_in_db = function
-  | Record _ ->
-      false
-  | Map (_, Record _) ->
-      false
-  | Set (Record _) ->
+  | Record _ | Map (_, Record _) | Set (Record _) ->
       false
   | _ ->
       true
@@ -69,7 +65,7 @@ let dm_to_string tys : O.Module.t =
       | DT.Bool ->
           "string_of_bool"
       | DT.DateTime ->
-          "Date.to_rfc3339"
+          "API.Date.to_rfc3339"
       | DT.Enum (_name, cs) ->
           let aux (c, _) =
             Printf.sprintf {|| %s -> "%s"|} (OU.constructor_of c) c
@@ -119,7 +115,7 @@ let string_to_dm tys : O.Module.t =
       | DT.Bool ->
           "bool_of_string"
       | DT.DateTime ->
-          "fun x -> Date.of_iso8601 x"
+          "fun x -> API.Date.of_iso8601 x"
       | DT.Enum (name, cs) ->
           let aux (c, _) = "\"" ^ c ^ "\" -> " ^ OU.constructor_of c in
           "fun v -> match v with\n      "
@@ -272,6 +268,56 @@ let ocaml_of_tbl_fields xs =
       (String.concat "; " (List.map (fun f -> "\"" ^ f ^ "\"") sql_fields))
 *)
 
+let take n xs =
+  let rec go n acc = function
+    | [] ->
+        (acc, [])
+    | xs when n = 0 ->
+        (acc, xs)
+    | x :: xs ->
+        go (n - 1) (x :: acc) xs
+  in
+  let front, back = go n [] xs in
+  (List.rev front, back)
+
+let partition n xs =
+  let len = List.length xs in
+  let count = len / n in
+  let rem = len mod n in
+  let rec go rem acc = function
+    | [] ->
+        acc
+    | xs ->
+        let extra = Bool.to_int (rem > 0) in
+        let front, back = take (count + extra) xs in
+        let rem = Int.max 0 (rem - 1) in
+        go rem (front :: acc) back
+  in
+  List.rev (go rem [] xs)
+
+let bucket_count = 20
+
+let db_action_dune api =
+  let api = make_db_api api in
+  let objs = Dm_api.objects_of_api api in
+  let buckets = partition bucket_count objs in
+  let emit_rule i os =
+    let listing = String.concat ", " List.(map (fun o -> o.DT.name) os) in
+    Printf.printf
+      {|
+; %s
+(rule
+  (target db_action_%d.ml)
+  (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+  (action
+    (with-stdout-to %%{target}
+      (run %%{gen} -filterinternal false -filter nothing -mode db-action -buckets %d -index %d))
+  )
+)|}
+      listing i bucket_count i
+  in
+  List.iteri emit_rule buckets
+
 let open_db_module =
   [
     "let __t = Context.database_of __context in"
@@ -279,7 +325,7 @@ let open_db_module =
      Xapi_database.Db_interface.DB_ACCESS) in"
   ]
 
-let db_action api : O.Module.t =
+let db_action api tag : O.Module.t =
   let api = make_db_api api in
   let expr = "expr" in
   let expr_arg = O.Named (expr, "Xapi_database.Db_filter_types.expr") in
@@ -364,7 +410,7 @@ let db_action api : O.Module.t =
               expr
           ; Printf.sprintf
               "List.map (fun (ref,(__regular_fields,__set_refs)) -> \
-               Ref.of_%sstring ref, %s __regular_fields __set_refs) records"
+               Ref.of_%sstring ref, %s ~__regular_fields ~__set_refs) records"
               (if obj.DT.name = "session" then "secret_" else "")
               conversion_fn
           ]
@@ -587,15 +633,31 @@ let db_action api : O.Module.t =
   in
   let all = Dm_api.objects_of_api api in
   let modules = List.concat_map (fun x -> [obj x; obj_init x]) all in
-  O.Module.make ~name:_db_action
+  let name = Printf.sprintf "%s_%d" _db_action tag in
+  O.Module.make ~name
     ~preamble:
       [
-        "open Xapi_database.Db_cache_types"
-      ; "module D=Debug.Make(struct let name=\"db\" end)"
+        {|[@@@warning "-unused-open"]|}
+      ; "open Xapi_database.Db_cache_types"
+      ; "module D = Debug.Make(struct let name=\"db\" end)"
       ; "open D"
       ]
     ~elements:(List.map (fun x -> O.Module.Module x) modules)
     ()
+
+(** Generate the DB actions for a specified bucket of objects. *)
+let gen_db_action_bucket api buckets index =
+  let objs = Dm_api.objects_of_api api in
+  let bucket =
+    let buckets = partition buckets objs in
+    List.nth buckets index
+  in
+  let api = Dm_api.filter_by ~obj:(Fun.flip List.memq bucket) api in
+  let md = db_action api index in
+  print_endline "open DM_to_String" ;
+  print_endline "open String_to_DM" ;
+  print_endline "open Xapi_db_record_types" ;
+  O.Module.strings_of md |> List.iter print_endline
 
 (** Generate a signature for the Server.Make functor. It should have one
     field per member in the user-facing API (not the special full 'DB api')
