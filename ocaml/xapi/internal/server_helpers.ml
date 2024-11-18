@@ -51,7 +51,7 @@ let unknown_rpc_failure func =
 
 let parameter_count_mismatch_failure func expected received =
   API.response_of_failure Api_errors.message_parameter_count_mismatch
-    [func; expected; received]
+    [func; string_of_int expected; string_of_int received]
 
 (** WARNING: the context is destroyed when execution is finished if the task is not forwarded, in database and not called asynchronous. *)
 let exec_with_context ~__context ~need_complete ?marshaller ?f_forward

@@ -47,8 +47,12 @@ val sync_ty_and_maybe_remove_prefix :
 
 val unknown_rpc_failure : string -> Rpc.response
 
-val parameter_count_mismatch_failure :
-  string -> string -> string -> Rpc.response
+val parameter_count_mismatch_failure : string -> int -> int -> Rpc.response
+(* [parameter_count_mismatch_failure func expected actual] returns an
+   RPC response that indicates failure, with relevant parameter count
+   mismatch message. Note that methods expecting a session ref as
+   their first parameter will report counts that exclude this
+   parameter. *)
 
 val dispatch_exn_wrapper : (unit -> Rpc.response) -> Rpc.response
 
