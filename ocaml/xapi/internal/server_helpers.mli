@@ -12,6 +12,27 @@
  * GNU Lesser General Public License for more details.
  *)
 
+(** Raised from a sub-dispatcher if the message is not found. *)
+exception UnknownMessage
+
+(** The context required by message dispatch handlers.
+    Generated sub-dispatchers will receive such a record as a parameter.*)
+type dispatcher_context = {
+    mod_debug: (module Debug.DEBUG)
+  ; mod_api_log_read: (module Debug.DEBUG)
+  ; mod_api_log_side_effect: (module Debug.DEBUG)
+  ; mod_custom: (module Custom_actions.CUSTOM_ACTIONS)
+  ; mod_forward: (module Custom_actions.CUSTOM_ACTIONS)
+  ; call: Rpc.call
+  ; __params: Rpc.t list
+  ; __normalised: string
+  ; __call: string
+  ; __label: string
+  ; __sync_ty: [`Async | `InternalAsync | `Sync]
+  ; fd: Unix.file_descr
+  ; http_req: Http.Request.t
+}
+
 val exec_with_new_task :
      ?http_other_config:(string * string) list
   -> ?quiet:bool

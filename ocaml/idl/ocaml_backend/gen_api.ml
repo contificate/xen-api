@@ -446,6 +446,9 @@ let gen_server highapi =
        ]
     )
 
+let gen_server_dispatcher highapi ~(buckets : int) ~index =
+  print (Gen_server.gen_dispatcher_module highapi ~buckets ~index)
+
 let gen_custom_actions highapi =
   List.iter (List.iter print)
     (between [""]

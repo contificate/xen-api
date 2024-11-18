@@ -35,7 +35,23 @@
 
 (subdir ocaml/xapi-dispatchers
   (dynamic_include ../xapi-generated/dispatchers-dune)
-  (library (name xapi_dispatchers) (modes best) (wrapped false)))
+  (library
+    (name xapi_dispatchers)
+    (modes best)
+    (wrapped false)
+    (libraries
+      xapi_internal_minimal
+      rpclib.core
+      xapi-types
+      xapi-log
+      xapi-stdext-encodings
+      xapi-consts
+      xapi-backtrace
+      xapi-stdext-date
+      rpclib.json
+    )
+  )
+)
 
 (subdir ocaml/xapi-db-actions
   ; Explicitly list static dependencies of the DB action modules

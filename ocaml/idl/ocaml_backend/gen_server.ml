@@ -463,11 +463,48 @@ let gen_dune api =
 (rule
  (target Server_%d.ml)
  (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
- (action (with-stdout-to %%{target} (echo "let foo () = ((* TODO *))")))
+ (action
+   (with-stdout-to %%{target}
+     (run %%{gen} -mode server-dispatcher -buckets %d -bucket-index %d -filterinternal true -filter closed)))
 )|}
-      listing i
+      listing i bucket_count i
   in
   List.mapi create_rule buckets |> String.concat "\n"
+
+let gen_dispatcher_module api ~buckets ~index =
+  let () = ignore (api, buckets, index) in
+  let api = Client.client_api ~sync:true api in
+  let objects = Dm_api.objects_of_api api in
+  let bucket = List.nth (partition buckets objects) index in
+  let listing =
+    String.concat ", " List.(map (fun o -> o.DT.name) bucket)
+    |> Printf.sprintf "(* %s *)"
+  in
+  let handlers_for obj =
+    obj.messages |> List.map (operation obj) |> String.concat "\n    "
+  in
+  let handlers = bucket |> List.map handlers_for |> String.concat "" in
+  Printf.sprintf
+    {|
+open API
+open Server_helpers
+
+%s
+[@@@ocaml.warning "-27"]
+let dispatch (ctx : Server_helpers.dispatcher_context) (__normalised : string) =
+  let { call; __params; __call; __label; __sync_ty; fd; http_req; _ } = ctx in
+  let module ApiLogRead = (val ctx.mod_api_log_read : Debug.DEBUG) in
+  let module ApiLogSideEffect = (val ctx.mod_api_log_read : Debug.DEBUG) in
+  let module Custom = (val ctx.mod_custom : Custom_actions.CUSTOM_ACTIONS) in
+  let module Forward = (val ctx.mod_forward : Custom_actions.CUSTOM_ACTIONS) in
+  let __params_length = List.length __params in
+  begin
+    match __normalised with
+    %s
+    | _ -> raise UnknownMessage
+  end 
+   |}
+    listing handlers
 
 (* ------------------------------------------------------------------------------------------
     Code to generate whole module

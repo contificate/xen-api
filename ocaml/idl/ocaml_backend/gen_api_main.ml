@@ -68,9 +68,9 @@ let set_gendebug () = Gen_server.enable_debugging := true
 
 let mode = ref None
 
-let buckets = ref None
+type split_options = {mutable buckets: int option; mutable index: int option}
 
-let index = ref None
+let split_options = {buckets= None; index= None}
 
 let _ =
   Arg.parse
@@ -81,6 +81,7 @@ let _ =
               "client"
             ; "server"
             ; "server-dune"
+            ; "server-dispatcher"
             ; "api"
             ; "utils"
             ; "db"
@@ -124,10 +125,13 @@ let _ =
       , "Output to the specified file"
       )
     ; ( "-buckets"
-      , Arg.Int (fun i -> buckets := Some i)
-      , "Specify number of buckets"
+      , Arg.Int (fun b -> split_options.buckets <- Some b)
+      , "Specify how many buckets to use"
       )
-    ; ("-index", Arg.Int (fun i -> index := Some i), "Specify bucket index")
+    ; ( "-bucket-index"
+      , Arg.Int (fun i -> split_options.index <- Some i)
+      , "Specify the bucket index"
+      )
     ]
     (fun x -> Printf.eprintf "Ignoring argument: %s\n" x)
     "Generate ocaml code from the datamodel. See -help" ;
@@ -145,6 +149,15 @@ let _ =
       Gen_api.gen_server api
   | Some "server-dune" ->
       Gen_api.gen_server_dune api
+  | Some "server-dispatcher" -> (
+    match (split_options.buckets, split_options.index) with
+    | Some buckets, Some index ->
+        Gen_api.gen_server_dispatcher api ~buckets ~index
+    | _ ->
+        failwith
+          "Most provide both -buckets and -bucket-index to -mode \
+           server-dispatcher"
+  )
   | Some "db" ->
       Gen_api.gen_db_actions ()
   | Some "string-to-dm" ->
@@ -156,11 +169,11 @@ let _ =
   | Some "db-action-records" ->
       Gen_api.gen_db_actions_record_types api
   | Some "db-action" -> (
-    match (!buckets, !index) with
+    match (split_options.buckets, split_options.index) with
     | Some buckets, Some index ->
         Gen_api.gen_db_actions_bucket api buckets index
     | _ ->
-        failwith "Must specify both -buckets  and -index with -mode db-action"
+        failwith "Must specify both -buckets and -index with -mode db-action"
   )
   | Some "actions" ->
       Gen_api.gen_custom_actions api

@@ -311,7 +311,7 @@ let db_action_dune api =
   (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
   (action
     (with-stdout-to %%{target}
-      (run %%{gen} -filterinternal false -filter nothing -mode db-action -buckets %d -index %d))
+      (run %%{gen} -filterinternal false -filter nothing -mode db-action -buckets %d -bucket-index %d))
   )
 )|}
       listing i bucket_count i
