@@ -422,6 +422,53 @@ let operation (obj : obj) (x : message) =
   ^ "\n"
   ^ "        end"
 
+let take n xs =
+  let rec go n acc = function
+    | [] ->
+        (acc, [])
+    | xs when n = 0 ->
+        (acc, xs)
+    | x :: xs ->
+        go (n - 1) (x :: acc) xs
+  in
+  let front, back = go n [] xs in
+  (List.rev front, back)
+
+let partition n xs =
+  let len = List.length xs in
+  let count = len / n in
+  let rem = len mod n in
+  let rec go rem acc = function
+    | [] ->
+        acc
+    | xs ->
+        let extra = Bool.to_int (rem > 0) in
+        let front, back = take (count + extra) xs in
+        let rem = Int.max 0 (rem - 1) in
+        go rem (front :: acc) back
+  in
+  List.rev (go rem [] xs)
+
+(* Generates a dune file that describes how to build each sub-dispatcher.
+   The xapi-dispatchers library dynamically includes this generated dune file. *)
+let gen_dune api =
+  let bucket_count = 20 in
+  let api = Client.client_api ~sync:true api in
+  let objects = Dm_api.objects_of_api api in
+  let buckets = partition bucket_count objects in
+  let create_rule i objects =
+    let listing = String.concat ", " List.(map (fun o -> o.DT.name) objects) in
+    Printf.sprintf
+      {|; %s
+(rule
+ (target Server_%d.ml)
+ (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+ (action (with-stdout-to %%{target} (echo "let foo () = ((* TODO *))")))
+)|}
+      listing i
+  in
+  List.mapi create_rule buckets |> String.concat "\n"
+
 (* ------------------------------------------------------------------------------------------
     Code to generate whole module
    ------------------------------------------------------------------------------------------ *)

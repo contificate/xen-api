@@ -516,3 +516,5 @@ let gen_db_actions_bucket highapi buckets index =
   Gen_db_actions.gen_db_action_bucket api_in_db buckets index
 
 let gen_rbac highapi = print (Gen_rbac.gen_permissions_of_static_roles highapi)
+
+let gen_server_dune highapi = print (Gen_server.gen_dune highapi)

@@ -80,6 +80,7 @@ let _ =
           ( [
               "client"
             ; "server"
+            ; "server-dune"
             ; "api"
             ; "utils"
             ; "db"
@@ -142,6 +143,8 @@ let _ =
       Gen_api.gen_record_deserialization api
   | Some "server" ->
       Gen_api.gen_server api
+  | Some "server-dune" ->
+      Gen_api.gen_server_dune api
   | Some "db" ->
       Gen_api.gen_db_actions ()
   | Some "string-to-dm" ->

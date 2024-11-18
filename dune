@@ -22,7 +22,20 @@
       (with-stdout-to %{target}
       (run %{gen} -filterinternal false -filter nothing -mode db-dune)))
   )
+
+  (rule
+     (target dispatchers-dune)
+     (deps (:gen ../idl/ocaml_backend/gen_api_main.exe))
+     (action
+       (with-stdout-to %{target}
+       (run %{gen} -mode server-dune)))
+  )
 )
+
+
+(subdir ocaml/xapi-dispatchers
+  (dynamic_include ../xapi-generated/dispatchers-dune)
+  (library (name xapi_dispatchers) (modes best) (wrapped false)))
 
 (subdir ocaml/xapi-db-actions
   ; Explicitly list static dependencies of the DB action modules
