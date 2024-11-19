@@ -33,6 +33,8 @@ type dispatcher_context = {
   ; http_req: Http.Request.t
 }
 
+val validate_parameter_encoding : Rpc.t list -> unit
+
 val exec_with_new_task :
      ?http_other_config:(string * string) list
   -> ?quiet:bool

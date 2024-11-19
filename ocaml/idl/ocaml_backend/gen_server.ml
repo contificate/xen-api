@@ -31,6 +31,8 @@ let _concurrency = "Concurrency"
 
 let enable_debugging = ref false
 
+let bucket_count = 10
+
 let is_session_arg arg =
   let binding = O.string_of_param arg in
   let converter = O.type_of_param arg in
@@ -452,7 +454,7 @@ let partition n xs =
 (* Generates a dune file that describes how to build each sub-dispatcher.
    The xapi-dispatchers library dynamically includes this generated dune file. *)
 let gen_dune api =
-  let bucket_count = 20 in
+  let bucket_count = bucket_count in
   let api = Client.client_api ~sync:true api in
   let objects = Dm_api.objects_of_api api in
   let buckets = partition bucket_count objects in
@@ -506,15 +508,169 @@ let dispatch (ctx : Server_helpers.dispatcher_context) (__normalised : string) =
    |}
     listing handlers
 
+(* Emits a function that aids in dispatching on
+   alternative-style (i.e. with an underscore; "class_message") messages.
+
+   It emits a decision tree that favours longest matches (maximal munch) first. *)
+let gen_bucketise api bucket_count =
+  (* Name of every object. *)
+  let objects = Dm_api.objects_of_api api |> List.map (fun o -> o.DT.name) in
+  (* Function to map object name to bucket. *)
+  let bucket_of =
+    let buckets = partition bucket_count objects in
+    let tbl = Hashtbl.create 64 in
+    let populate bucket objects =
+      List.iter (fun o -> Hashtbl.replace tbl o bucket) objects
+    in
+    List.iteri populate buckets ;
+    fun name ->
+      match Hashtbl.find_opt tbl name with
+      | Some index ->
+          index
+      | _ ->
+          failwith
+            (Printf.sprintf "Could not find which bucket %s belongs to" name)
+  in
+  (* Split an object name into its "_"-delimited components and pair
+     it with its bucket. *)
+  let split obj =
+    let bucket = bucket_of obj in
+    let pieces = Astring.String.cuts ~sep:"_" obj |> Array.of_list in
+    (pieces, bucket, obj)
+  in
+  (* Sort by components length, in decreasing order. This order
+     ensures longest match (maximal munch). *)
+  let cases =
+    List.map split objects
+    |> List.sort (fun (ps, _, _) (ps', _, _) ->
+           -compare (Array.length ps) (Array.length ps')
+       )
+  in
+  (* Emit each case as | "c_1" :: "c_2" :: ... :: "c_N" :: _ -> (bucket, "c_1_c_2_..._cN").
+     The second components is the object name which should be considered in the dispatch logic,
+     in the case that objects "foo" and "foo_bar" end up in the same bucket.
+  *)
+  let cases =
+    let pattern_of (pieces, index, obj) =
+      let pieces = Array.to_list pieces in
+      List.map (Printf.sprintf {|"%s"|}) pieces @ ["_"] |> String.concat " :: "
+      |> fun p -> Printf.sprintf {|| %s -> (%d, "%s")|} p index obj
+    in
+    List.map pattern_of cases
+  in
+  let body = ("function" :: cases) @ ["| _ -> raise UnknownMessage\n"] in
+  let doc = "Longest (maximal munch) object name match function" in
+  O.Module.Let {name= "bucketise"; params= []; ty= "int * string"; doc; body}
+
+(** Function that uses "bucketise" (above) to decide which bucket to use.
+    
+    If the user supplies a message containing a "." delimiter, we
+    split it and feed the prefix (before ".") to bucketise as a
+    singleton list. Otherwise, we split by "_" and feed the entire
+    list for maximal munch semantics.
+
+    This doesn't fully rule out ambiguity, as messages that map to the same alternative wire name
+    may also belong to objects that map to the same bucket - in which case, it is dependent on which
+    is listed first in the dispatcher (as was the previous situation in server.ml). *)
+let choose_bucket =
+  let body =
+    [
+      "let ps ="
+    ; {|  let split = Astring.String.cuts ~sep:"_" in|}
+    ; {|  match Astring.String.cut ~sep:"." msg with|}
+    ; "  | Some (prefix, _) -> split prefix"
+    ; "  | _ -> split msg"
+    ; "in"
+    ; "bucketise ps\n"
+    ]
+  in
+  O.Module.Let
+    {
+      name= "choose_bucket"
+    ; params= [Anon (Some "msg", "string")]
+    ; ty= "int * string"
+    ; doc= ""
+    ; body
+    }
+
 (* ------------------------------------------------------------------------------------------
     Code to generate whole module
    ------------------------------------------------------------------------------------------ *)
 
+let bucket_array =
+  let body =
+    Printf.sprintf "Server_%d.dispatch"
+    |> List.init bucket_count
+    |> String.concat "; "
+    |> Printf.sprintf "[| %s |]\n"
+    |> fun line -> [line]
+  in
+  O.Module.Let {name= "bucket_array"; params= []; ty= ""; doc= ""; body}
+
+let create_dispatcher_context =
+  [
+    "let ctx : Server_helpers.dispatcher_context = {"
+  ; "  mod_debug = (module D);"
+  ; "  mod_api_log_read = (module ApiLogRead);"
+  ; "  mod_api_log_side_effect = (module ApiLogSideEffect);"
+  ; "  mod_custom = (module Custom);"
+  ; "  mod_forward = (module Forward);"
+  ; "  call;"
+  ; "  __params;"
+  ; "  __normalised;"
+  ; "  __call;"
+  ; "  __label;"
+  ; "  __sync_ty;"
+  ; "  fd;"
+  ; "  http_req;"
+  ; "}"
+  ; "in"
+  ]
+
 let gen_module api : O.Module.t =
-  (* For testing purposes the ocaml client and server are kept in sync *)
   let api = Client.client_api ~sync:true api in
-  let obj (obj : obj) = List.map (operation obj) obj.messages in
-  let all_objs = Dm_api.objects_of_api api in
+  let dispatch_call =
+    let params =
+      [
+        O.Anon (Some "http_req", "Http.Request.t")
+      ; O.Anon (Some "fd", "Unix.file_descr")
+      ; O.Anon (Some "call", "Rpc.call")
+      ]
+    in
+    let body =
+      [
+        "let __call, __params = call.Rpc.name, call.Rpc.params in"
+      ; "Server_helpers.validate_parameter_encoding __params;"
+      ; "let __label = __call in"
+      ; "let (__sync_ty, __call) = \
+         Server_helpers.sync_ty_and_maybe_remove_prefix __call in"
+      ; "let subtask_of = if http_req.task <> None then http_req.task else \
+         http_req.subtask_of in"
+      ; "let subtask_of : API.ref_task option  = Option.map Ref.of_string \
+         subtask_of in"
+      ; "let http_other_config = Context.get_http_other_config http_req in"
+      ; "let (let@) = (@@) in"
+      ; {|let@ __context = Server_helpers.exec_with_new_task ("dispatch:"^__call^"") ~http_other_config ?subtask_of in|}
+      ; "let@ () = Server_helpers.dispatch_exn_wrapper in"
+      ; {|let __normalised = Str.(replace_first (regexp "\\.") "_") __call in|}
+      ]
+      @ create_dispatcher_context
+      @ [
+          "let (index, _obj) = choose_bucket __call in"
+        ; "bucket_array.(index) ctx __normalised"
+        ]
+    in
+    O.Module.Let {name= "dispatch_call"; params; ty= "response"; doc= ""; body}
+  in
+  let elements =
+    [
+      bucket_array
+    ; gen_bucketise api bucket_count
+      (* decide bucket of object based on longest valid prefix*)
+    ; choose_bucket (* decide bucket of message without (a)sync prefix *)
+    ; dispatch_call (* top-level dispatch logic *)
+    ]
+  in
   O.Module.make ~name:module_name
     ~args:
       [
@@ -528,99 +684,6 @@ let gen_module api : O.Module.t =
       ; "module ApiLogRead = Debug.Make(struct let name = \"api_readonly\" end)"
       ; "module ApiLogSideEffect = Debug.Make(struct let name = \"api_effect\" \
          end)"
-        (*      "exception Invalid_operation"; *)
+      ; ""
       ]
-    ~elements:
-      [
-        O.Module.Let
-          (O.Let.make ~name:"dispatch_call"
-             ~params:
-               [
-                 O.Anon (Some "http_req", "Http.Request.t")
-               ; O.Anon (Some "fd", "Unix.file_descr")
-               ; O.Anon (Some "call", "Rpc.call")
-               ]
-             ~ty:"response"
-             ~body:
-               ([
-                  "let __call, __params = call.Rpc.name, call.Rpc.params in"
-                ; "let __params_length = List.length __params in"
-                ; "List.iter (fun p -> let s = Rpc.to_string p in if not \
-                   (Xapi_stdext_encodings.Encodings.UTF8_XML.is_valid s) then"
-                ; "raise (Api_errors.Server_error(Api_errors.invalid_value, \
-                   [\"Invalid UTF-8 string in parameter\"; s])))  __params;"
-                ; "let __label = __call in"
-                ; "let (__sync_ty, __call) = \
-                   Server_helpers.sync_ty_and_maybe_remove_prefix __call in"
-                ; "let subtask_of = if http_req.Http.Request.task <> None then \
-                   http_req.Http.Request.task else \
-                   http_req.Http.Request.subtask_of in"
-                ; "let http_other_config = Context.get_http_other_config \
-                   http_req in"
-                ; "Server_helpers.exec_with_new_task \
-                   (\"dispatch:\"^__call^\"\") ~http_other_config \
-                   ?subtask_of:(Option.map Ref.of_string subtask_of) (fun \
-                   __context ->"
-                ; {|let __normalised = Str.(replace_first (regexp "\\.") "_") __call in|}
-                ; "Server_helpers.dispatch_exn_wrapper (fun () -> (match \
-                   __normalised with "
-                ]
-               @ List.concat_map obj all_objs
-               @ [
-                   "| \"system_listMethods\" -> "
-                 ; "  success (rpc_of_string_set ["
-                 ]
-               @ (let objmsgs obj =
-                    List.map
-                      (fun msg ->
-                        Printf.sprintf "\"%s\";"
-                          (DU.wire_name ~sync:true obj msg)
-                      )
-                      obj.messages
-                  in
-                  let allmsg =
-                    List.map
-                      (fun obj -> String.concat "" (objmsgs obj))
-                      all_objs
-                  in
-                  allmsg
-                 )
-               @ [
-                   " ])"
-                 ; "| func -> "
-                 ; "  if (try Scanf.sscanf func \"system_isAlive:%s\" (fun _ \
-                    -> true) with _ -> false)"
-                 ; "  then Rpc.success (List.hd __params)"
-                 ; "  else begin"
-                 ; "    if (try Scanf.sscanf func \"unknown-message-%s\" (fun \
-                    _ -> false) with _ -> true)"
-                 ; "    then "
-                   ^ debug "This is not a built-in rpc \"%s\"" ["__call"]
-                 ; "    begin match __params with"
-                 ; "    | session_id_rpc :: _->"
-                 ; "      (* based on the Host.call_extension call *)"
-                 ; "      let action = \"Host.call_extension\" in"
-                 ; "      let session_id = ref_session_of_rpc session_id_rpc in"
-                 ; "      Session_check.check ~intra_pool_only:false \
-                    ~session_id ~action;"
-                 ; "      let call_rpc = Rpc.String __call in "
-                 ; "      let arg_names_values ="
-                 ; "        [(\"session_id\", session_id_rpc); (__call, \
-                    call_rpc)]"
-                 ; "      in"
-                 ; "      let key_names = [] in"
-                 ; "      let rbac __context fn = Rbac.check session_id action \
-                    ~args:arg_names_values ~keys:key_names ~__context ~fn in"
-                 ; "      Server_helpers.forward_extension ~__context rbac { \
-                    call with Rpc.name = __call }"
-                 ; "    | _ ->"
-                 ; "      Server_helpers.unknown_rpc_failure func "
-                 ; "    end"
-                 ; "  end"
-                 ; ")))"
-                 ]
-               )
-             ()
-          )
-      ]
-    ()
+    ~elements ()

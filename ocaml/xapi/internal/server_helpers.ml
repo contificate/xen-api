@@ -36,6 +36,18 @@ type dispatcher_context = {
   ; http_req: Http.Request.t
 }
 
+(** Validate encoding of RPC parameters *)
+let validate_parameter_encoding (params : Rpc.t list) =
+  let go p =
+    let s = Rpc.to_string p in
+    if not (Xapi_stdext_encodings.Encodings.UTF8_XML.is_valid s) then
+      raise
+        (Api_errors.Server_error
+           (Api_errors.invalid_value, ["Invalid UTF-8 string in parameter"; s])
+        )
+  in
+  List.iter go params
+
 let ( let@ ) f x = f x
 
 let my_assoc fld assoc_list =

@@ -100,6 +100,7 @@
     forkexec
     xapi-idl
     xapi_aux
+    xapi-stdext-encodings
     xapi-stdext-std
     xapi-stdext-date
     xapi-stdext-pervasives
