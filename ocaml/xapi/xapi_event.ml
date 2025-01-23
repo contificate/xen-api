@@ -22,9 +22,7 @@ module D = Debug.Make (struct let name = "xapi_event" end)
 open D
 
 module Message = struct
-  type t =
-    | Create of (API.ref_message * API.message_t)
-    | Del of API.ref_message
+  type t = Create of API.ref_message * API.message_t | Del of API.ref_message
 
   let get_since_for_events :
       (__context:Context.t -> int64 -> int64 * t list) ref =
