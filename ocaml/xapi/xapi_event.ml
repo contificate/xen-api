@@ -65,20 +65,11 @@ module Subscription = struct
                (Api_errors.event_subscription_parse_failure, [x])
             )
 
-  let any = List.fold_left (fun acc x -> acc || x) false
-
   (** [table_matches subs tbl]: true if at least one subscription from [subs] would select some events from [tbl] *)
   let table_matches subs tbl =
     let tbl = String.lowercase_ascii tbl in
-    let matches = function
-      | All ->
-          true
-      | Class x ->
-          x = tbl
-      | Object (x, _) ->
-          x = tbl
-    in
-    any (List.map matches subs)
+    let matches = function All -> true | Class x | Object (x, _) -> x = tbl in
+    List.exists matches subs
 
   (** [event_matches subs ev]: true if at least one subscription from [subs] selects for specified class and object *)
   let object_matches subs ty _ref =
@@ -91,7 +82,7 @@ module Subscription = struct
       | Object (x, y) ->
           x = tbl && y = _ref
     in
-    any (List.map matches subs)
+    List.exists matches subs
 
   (** [event_matches subs ev]: true if at least one subscription from [subs] selects for event [ev] *)
   let event_matches subs ev = object_matches subs ev.ty ev.reference
@@ -290,7 +281,7 @@ module Next = struct
        		   queue may have been coalesced. *)
     if !some_events_lost (* is true *) then events_lost () ;
     (* NB queue is kept in reverse order *)
-    List.map snd (List.rev selected_events)
+    List.rev_map snd selected_events
 end
 
 module From = struct
