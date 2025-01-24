@@ -513,16 +513,17 @@ type acc = {
   ; last: Xapi_database.Db_cache_types.Time.t
 }
 
-let collect_events subs tableset last_generation acc table =
+let collect_events subs tableset last_generation entries table =
+  let last_generation = ref !last_generation in
   let open Xapi_database in
   let open Db_cache_types in
-  (* Fold over the live objects *)
   let subscriptions_match =
     let table = String.lowercase_ascii table in
     Subscription.object_matches subs table
   in
   let table_entry = TableSet.find table tableset in
-  let alpha objref stat _ ({creates; mods; last; _} as entries) =
+  let prepend_recent_entries objref stat _ ({creates; mods; last; _} as entries)
+      =
     let Stat.{created; modified; deleted} = stat in
     if subscriptions_match objref then
       let last = max last (max modified deleted) in
@@ -542,7 +543,7 @@ let collect_events subs tableset last_generation acc table =
     else
       entries
   in
-  let beta objref stat ({deletes; last; _} as entries) =
+  let prepend_deleted_entries objref stat ({deletes; last; _} as entries) =
     let Stat.{created; modified; deleted} = stat in
     if subscriptions_match objref then
       let last = max last (max modified deleted) in
@@ -556,13 +557,10 @@ let collect_events subs tableset last_generation acc table =
     else
       entries
   in
-  let first : acc -> acc =
-    Table.fold_over_recent !last_generation alpha table_entry
-  in
-  let second : acc -> acc =
-    Table.fold_over_deleted !last_generation beta table_entry
-  in
-  acc |> first |> second
+  entries
+  |> Table.fold_over_recent !last_generation prepend_recent_entries table_entry
+  |> Table.fold_over_deleted !last_generation prepend_deleted_entries
+       table_entry
 
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
