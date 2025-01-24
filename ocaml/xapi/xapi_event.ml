@@ -545,8 +545,8 @@ let collect_events subs tableset last_generation entries table =
   in
   let prepend_deleted_entries objref stat ({deletes; last; _} as acc) =
     let Stat.{created; modified; deleted} = stat in
+    let last = max last (max modified deleted) in
     if Subscription.object_matches subs table objref then
-      let last = max last (max modified deleted) in
       let deletes =
         if last_generation <= created then
           (table, objref, deleted) :: deletes
@@ -555,7 +555,7 @@ let collect_events subs tableset last_generation entries table =
       in
       {acc with deletes; last}
     else
-      acc
+      {acc with last}
   in
   entries
   |> Table.fold_over_recent last_generation prepend_recent_entries table_entry
