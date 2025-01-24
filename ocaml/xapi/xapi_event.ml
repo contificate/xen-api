@@ -517,10 +517,10 @@ let valid_ref_counts_for tables =
 
 let factored subs tableset last_generation =
   let open Xapi_database in
-  (* Shadow it with a version that doesn't ever change. Semantically
-     equivalent to doing a single dereference, but without rewriting
-     def-use chains. *)
-  let last_generation = ref !last_generation in
+  (* (\* Shadow it with a version that doesn't ever change. Semantically *)
+  (*    equivalent to doing a single dereference, but without rewriting *)
+  (*    def-use chains. *\) *)
+  (* let last_generation = ref !last_generation in *)
   fun acc table ->
     (* Fold over the live objects *)
     let acc =
@@ -577,51 +577,51 @@ let factored subs tableset last_generation =
       (Db_cache_types.TableSet.find table tableset)
       acc
 
-let _collect_events subs tableset last_generation entries table =
-  let open Xapi_database in
-  let open Db_cache_types in
-  let table_entry = TableSet.find table tableset in
-  let table = String.lowercase_ascii table in
-  (* Fold over the recent objects and collect creation and
-     modification events. *)
-  let prepend_recent_entries objref stat _ ({creates; mods; last; _} as acc) =
-    let Stat.{created; modified; deleted} = stat in
-    if Subscription.object_matches subs table objref then
-      let last = max last (max modified deleted) in
-      let creates =
-        if created > last_generation then
-          (table, objref, created) :: creates
-        else
-          creates
-      in
-      let mods =
-        (* Invariant: modified > created. *)
-        if modified > last_generation && not (created > last_generation) then
-          (table, objref, modified) :: mods
-        else
-          mods
-      in
-      {acc with creates; mods; last}
-    else
-      acc
-  in
-  let prepend_deleted_entries objref stat ({deletes; last; _} as acc) =
-    let Stat.{created; modified; deleted} = stat in
-    let last = max last (max modified deleted) in
-    if Subscription.object_matches subs table objref then
-      let deletes =
-        if last_generation <= created then
-          (table, objref, deleted) :: deletes
-        else
-          deletes
-      in
-      {acc with deletes; last}
-    else
-      {acc with last}
-  in
-  entries
-  |> Table.fold_over_recent last_generation prepend_recent_entries table_entry
-  |> Table.fold_over_deleted last_generation prepend_deleted_entries table_entry
+(* let _collect_events subs tableset last_generation entries table = *)
+(*   let open Xapi_database in *)
+(*   let open Db_cache_types in *)
+(*   let table_entry = TableSet.find table tableset in *)
+(*   let table = String.lowercase_ascii table in *)
+(*   (\* Fold over the recent objects and collect creation and *)
+(*      modification events. *\) *)
+(*   let prepend_recent_entries objref stat _ ({creates; mods; last; _} as acc) = *)
+(*     let Stat.{created; modified; deleted} = stat in *)
+(*     if Subscription.object_matches subs table objref then *)
+(*       let last = max last (max modified deleted) in *)
+(*       let creates = *)
+(*         if created > last_generation then *)
+(*           (table, objref, created) :: creates *)
+(*         else *)
+(*           creates *)
+(*       in *)
+(*       let mods = *)
+(*         (\* Invariant: modified > created. *\) *)
+(*         if modified > last_generation && not (created > last_generation) then *)
+(*           (table, objref, modified) :: mods *)
+(*         else *)
+(*           mods *)
+(*       in *)
+(*       {acc with creates; mods; last} *)
+(*     else *)
+(*       acc *)
+(*   in *)
+(*   let prepend_deleted_entries objref stat ({deletes; last; _} as acc) = *)
+(*     let Stat.{created; modified; deleted} = stat in *)
+(*     let last = max last (max modified deleted) in *)
+(*     if Subscription.object_matches subs table objref then *)
+(*       let deletes = *)
+(*         if last_generation <= created then *)
+(*           (table, objref, deleted) :: deletes *)
+(*         else *)
+(*           deletes *)
+(*       in *)
+(*       {acc with deletes; last} *)
+(*     else *)
+(*       {acc with last} *)
+(*   in *)
+(*   entries *)
+(*   |> Table.fold_over_recent last_generation prepend_recent_entries table_entry *)
+(*   |> Table.fold_over_deleted last_generation prepend_deleted_entries table_entry *)
 
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
