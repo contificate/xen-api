@@ -506,21 +506,25 @@ let rec next ~__context =
 
 type entry = string * string * Xapi_database.Db_cache_types.Time.t
 
-type acc =
-  entry list * entry list * entry list * Xapi_database.Db_cache_types.Time.t
+type acc = {
+    creates: entry list
+  ; mods: entry list
+  ; deletes: entry list
+  ; last: Xapi_database.Db_cache_types.Time.t
+}
 
 let collect_events subs tableset last_generation acc table =
   let open Xapi_database in
   let open Db_cache_types in
   (* Fold over the live objects *)
-  let object_matches =
+  let subscriptions_match =
     let table = String.lowercase_ascii table in
     Subscription.object_matches subs table
   in
   let table_entry = TableSet.find table tableset in
-  let alpha objref stat _ (creates, mods, deletes, last) =
+  let alpha objref stat _ ({creates; mods; last; _} as entries) =
     let Stat.{created; modified; deleted} = stat in
-    if object_matches objref then
+    if subscriptions_match objref then
       let last = max last (max modified deleted) in
       let creates =
         if created > !last_generation then
@@ -534,13 +538,13 @@ let collect_events subs tableset last_generation acc table =
         else
           mods
       in
-      (creates, mods, deletes, last)
+      {entries with creates; mods; last}
     else
-      (creates, mods, deletes, last)
+      entries
   in
-  let beta objref stat (creates, mods, deletes, last) =
+  let beta objref stat ({deletes; last; _} as entries) =
     let Stat.{created; modified; deleted} = stat in
-    if object_matches objref then
+    if subscriptions_match objref then
       let last = max last (max modified deleted) in
       let deletes =
         if created > !last_generation then
@@ -548,9 +552,9 @@ let collect_events subs tableset last_generation acc table =
         else
           (table, objref, deleted) :: deletes
       in
-      (creates, mods, deletes, last)
+      {entries with deletes; last}
     else
-      (creates, mods, deletes, last)
+      entries
   in
   let first : acc -> acc =
     Table.fold_over_recent !last_generation alpha table_entry
@@ -586,20 +590,20 @@ let from_inner __context session subs from from_t deadline =
       else
         (0L, [])
     in
-    ( msg_gen
-    , messages
-    , tableset
-    , List.fold_left
-        (collect_events subs tableset last_generation)
-        ([], [], [], !last_generation)
-        tables
-    )
+    let entries =
+      let initial =
+        {creates= []; mods= []; deletes= []; last= !last_generation}
+      in
+      let folder = collect_events subs tableset last_generation in
+      List.fold_left folder initial tables
+    in
+    (msg_gen, messages, tableset, entries)
   in
   (* Each event.from should have an independent subscription record *)
-  let msg_gen, messages, tableset, (creates, mods, deletes, last) =
+  let msg_gen, messages, tableset, {creates; mods; deletes; last} =
     with_call session subs (fun sub ->
         let rec grab_nonempty_range () =
-          let ( (msg_gen, messages, _tableset, (creates, mods, deletes, last))
+          let ( (msg_gen, messages, _tableset, {creates; mods; deletes; last})
                 as result
               ) =
             Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
