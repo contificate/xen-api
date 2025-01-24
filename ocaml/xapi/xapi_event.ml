@@ -509,60 +509,56 @@ type entry = string * string * Xapi_database.Db_cache_types.Time.t
 type acc =
   entry list * entry list * entry list * Xapi_database.Db_cache_types.Time.t
 
-let collect_events subs tableset last_generation =
+let collect_events subs tableset last_generation acc table =
   let open Xapi_database in
   let open Db_cache_types in
-  fun acc table ->
-    (* Fold over the live objects *)
-    let alpha objref stat _ (creates, mods, deletes, last) =
-      let Stat.{created; modified; deleted} = stat in
-      if Subscription.object_matches subs (String.lowercase_ascii table) objref
-      then
-        let last = max last (max modified deleted) in
-        (* mtime guaranteed to always be larger than ctime *)
-        ( ( if created > !last_generation then
-              (table, objref, created) :: creates
-            else
-              creates
-          )
-        , ( if modified > !last_generation && not (created > !last_generation)
-            then
-              (table, objref, modified) :: mods
-            else
-              mods
-          )
-        , (* Only have a mod event if we don't have a created event *)
-          deletes
-        , last
-        )
-      else
-        (creates, mods, deletes, last)
-    in
-    let beta objref stat (creates, mods, deletes, last) =
-      let Stat.{created; modified; deleted} = stat in
-      if Subscription.object_matches subs (String.lowercase_ascii table) objref
-      then
-        let last = max last (max modified deleted) in
-        (* mtime guaranteed to always be larger than ctime *)
+  (* Fold over the live objects *)
+  let object_matches =
+    let table = String.lowercase_ascii table in
+    Subscription.object_matches subs table
+  in
+  let table_entry = TableSet.find table tableset in
+  let alpha objref stat _ (creates, mods, deletes, last) =
+    let Stat.{created; modified; deleted} = stat in
+    if object_matches objref then
+      let last = max last (max modified deleted) in
+      let creates =
         if created > !last_generation then
-          (creates, mods, deletes, last)
-        (* It was created and destroyed since the last update *)
+          (table, objref, created) :: creates
         else
-          (creates, mods, (table, objref, deleted) :: deletes, last)
-      (* It might have been modified, but we can't tell now *)
-      else
-        (creates, mods, deletes, last)
-    in
-    let first : acc -> acc =
-      Table.fold_over_recent !last_generation alpha
-        (TableSet.find table tableset)
-    in
-    let second : acc -> acc =
-      (* Fold over the deleted objects *)
-      Table.fold_over_deleted !last_generation beta
-        (TableSet.find table tableset)
-    in
-    acc |> first |> second
+          creates
+      in
+      let mods =
+        if modified > !last_generation && not (created > !last_generation) then
+          (table, objref, modified) :: mods
+        else
+          mods
+      in
+      (creates, mods, deletes, last)
+    else
+      (creates, mods, deletes, last)
+  in
+  let beta objref stat (creates, mods, deletes, last) =
+    let Stat.{created; modified; deleted} = stat in
+    if object_matches objref then
+      let last = max last (max modified deleted) in
+      let deletes =
+        if created > !last_generation then
+          deletes
+        else
+          (table, objref, deleted) :: deletes
+      in
+      (creates, mods, deletes, last)
+    else
+      (creates, mods, deletes, last)
+  in
+  let first : acc -> acc =
+    Table.fold_over_recent !last_generation alpha table_entry
+  in
+  let second : acc -> acc =
+    Table.fold_over_deleted !last_generation beta table_entry
+  in
+  acc |> first |> second
 
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
