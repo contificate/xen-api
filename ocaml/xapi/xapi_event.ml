@@ -509,10 +509,10 @@ let collect_events subs tableset last_generation =
   let open Db_cache_types in
   fun acc table ->
     (* Fold over the live objects *)
-    let acc =
-      Db_cache_types.Table.fold_over_recent !last_generation
-        (fun objref {Db_cache_types.Stat.created; modified; deleted} _
-             (creates, mods, deletes, last) ->
+    let first =
+      Table.fold_over_recent !last_generation
+        (fun objref stat _ (creates, mods, deletes, last) ->
+          let Stat.{created; modified; deleted} = stat in
           if
             Subscription.object_matches subs
               (String.lowercase_ascii table)
@@ -539,29 +539,32 @@ let collect_events subs tableset last_generation =
           else
             (creates, mods, deletes, last)
         )
-        (Db_cache_types.TableSet.find table tableset)
-        acc
+        (TableSet.find table tableset)
     in
-    (* Fold over the deleted objects *)
-    Db_cache_types.Table.fold_over_deleted !last_generation
-      (fun objref {Db_cache_types.Stat.created; modified; deleted}
-           (creates, mods, deletes, last) ->
-        if
-          Subscription.object_matches subs (String.lowercase_ascii table) objref
-        then
-          let last = max last (max modified deleted) in
-          (* mtime guaranteed to always be larger than ctime *)
-          if created > !last_generation then
-            (creates, mods, deletes, last)
-          (* It was created and destroyed since the last update *)
+    let second =
+      (* Fold over the deleted objects *)
+      Table.fold_over_deleted !last_generation
+        (fun objref stat (creates, mods, deletes, last) ->
+          let Stat.{created; modified; deleted} = stat in
+          if
+            Subscription.object_matches subs
+              (String.lowercase_ascii table)
+              objref
+          then
+            let last = max last (max modified deleted) in
+            (* mtime guaranteed to always be larger than ctime *)
+            if created > !last_generation then
+              (creates, mods, deletes, last)
+            (* It was created and destroyed since the last update *)
+            else
+              (creates, mods, (table, objref, deleted) :: deletes, last)
+          (* It might have been modified, but we can't tell now *)
           else
-            (creates, mods, (table, objref, deleted) :: deletes, last)
-        (* It might have been modified, but we can't tell now *)
-        else
-          (creates, mods, deletes, last)
-      )
-      (Db_cache_types.TableSet.find table tableset)
-      acc
+            (creates, mods, deletes, last)
+        )
+        (TableSet.find table tableset)
+    in
+    second (first acc)
 
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
