@@ -513,8 +513,10 @@ type acc = {
   ; last: Xapi_database.Db_cache_types.Time.t
 }
 
-let collect_events subs tableset last_generation entries table =
-  let last_generation = ref !last_generation in
+(* [collect_events subs tables since] returns a function (acc ->
+   tablename -> acc) that can be used to accumulate creation,
+   modification, and deletion events since a given time ([since]). *)
+let collect_events subs tableset since entries table =
   let open Xapi_database in
   let open Db_cache_types in
   let subscriptions_match =
@@ -522,20 +524,19 @@ let collect_events subs tableset last_generation entries table =
     Subscription.object_matches subs table
   in
   let table_entry = TableSet.find table tableset in
-  let prepend_recent_entries objref stat _ ({creates; mods; last; _} as entries)
-      =
+  let prepend_recent_entries obj stat _ ({creates; mods; last; _} as entries) =
     let Stat.{created; modified; deleted} = stat in
-    if subscriptions_match objref then
+    if subscriptions_match obj then
       let last = max last (max modified deleted) in
       let creates =
-        if created > !last_generation then
-          (table, objref, created) :: creates
+        if created > since then
+          (table, obj, created) :: creates
         else
           creates
       in
       let mods =
-        if modified > !last_generation && not (created > !last_generation) then
-          (table, objref, modified) :: mods
+        if modified > since && not (created > since) then
+          (table, obj, modified) :: mods
         else
           mods
       in
@@ -543,24 +544,23 @@ let collect_events subs tableset last_generation entries table =
     else
       entries
   in
-  let prepend_deleted_entries objref stat ({deletes; last; _} as entries) =
+  let prepend_deleted_entries obj stat ({deletes; last; _} as entries) =
     let Stat.{created; modified; deleted} = stat in
-    if subscriptions_match objref then
+    if subscriptions_match obj then
       let last = max last (max modified deleted) in
       let deletes =
-        if created > !last_generation then
+        if created > since then
           deletes
         else
-          (table, objref, deleted) :: deletes
+          (table, obj, deleted) :: deletes
       in
       {entries with deletes; last}
     else
       entries
   in
   entries
-  |> Table.fold_over_recent !last_generation prepend_recent_entries table_entry
-  |> Table.fold_over_deleted !last_generation prepend_deleted_entries
-       table_entry
+  |> Table.fold_over_recent since prepend_recent_entries table_entry
+  |> Table.fold_over_deleted since prepend_deleted_entries table_entry
 
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
@@ -589,44 +589,45 @@ let from_inner __context session subs from from_t deadline =
         (0L, [])
     in
     let entries =
-      let initial =
-        {creates= []; mods= []; deletes= []; last= !last_generation}
-      in
-      let folder = collect_events subs tableset last_generation in
+      let beginning = !last_generation in
+      let initial = {creates= []; mods= []; deletes= []; last= beginning} in
+      let folder = collect_events subs tableset beginning in
       List.fold_left folder initial tables
     in
     (msg_gen, messages, tableset, entries)
   in
-  (* Each event.from should have an independent subscription record *)
-  let msg_gen, messages, tableset, {creates; mods; deletes; last} =
-    with_call session subs (fun sub ->
-        let rec grab_nonempty_range () =
-          let ( (msg_gen, messages, _tableset, {creates; mods; deletes; last})
-                as result
-              ) =
-            Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
-          in
-          if
-            creates = []
-            && mods = []
-            && deletes = []
-            && messages = []
-            && Unix.gettimeofday () < deadline
-          then (
-            last_generation := last ;
-            (* Cur_id was bumped, but nothing relevent fell out of the db. Therefore the *)
-            sub.cur_id <- last ;
-            (* last id the client got is equivalent to the current one *)
-            last_msg_gen := msg_gen ;
-            wait2 sub last deadline ;
-            Thread.delay 0.05 ;
-            grab_nonempty_range ()
-          ) else
-            result
-        in
-        grab_nonempty_range ()
-    )
+  let rec grab_non_empty_range call =
+    (* Grab a range of events. If the range is empty and the deadline
+       has not expired, further defer the subscription (call) and try
+       again (iteratively). *)
+    let result =
+      Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
+    in
+    let msg_gen, messages, _, entries = result in
+    let {creates; mods; deletes; last} = entries in
+    if
+      creates = []
+      && mods = []
+      && deletes = []
+      && messages = []
+      && Unix.gettimeofday () < deadline
+    then (
+      last_generation := last ;
+      (* cur_id was bumped, but nothing relevent fell out of the
+         DB. Therefore the last id the client got is equivalent to
+         the current one. *)
+      call.cur_id <- last ;
+      last_msg_gen := msg_gen ;
+      wait2 call last deadline ;
+      Thread.delay 0.05 ;
+      (grab_non_empty_range [@tailcall]) call
+    ) else
+      result
   in
+  let msg_gen, messages, tableset, entries =
+    with_call session subs grab_non_empty_range
+  in
+  let {creates; mods; deletes; last} = entries in
   last_generation := last ;
   let event_of op ?snapshot (table, objref, time) =
     {
