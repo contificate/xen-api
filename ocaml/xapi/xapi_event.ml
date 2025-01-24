@@ -504,6 +504,64 @@ let rec next ~__context =
   else
     rpc_of_events relevant
 
+type entry = string * string * Xapi_database.Db_cache_types.Time.t
+
+type acc = {
+    creates: entry list
+  ; mods: entry list
+  ; deletes: entry list
+  ; last: Xapi_database.Db_cache_types.Time.t
+}
+
+(* [collect_events subs tables since] returns a function (acc ->
+   tablename -> acc) that can be used to accumulate creation,
+   modification, and deletion events since a given point ([since]). *)
+let collect_events subs tableset since entries table =
+  let open Xapi_database in
+  let open Db_cache_types in
+  let subscriptions_match =
+    let table = String.lowercase_ascii table in
+    Subscription.object_matches subs table
+  in
+  let table_entry = TableSet.find table tableset in
+  let prepend_recent_entries obj stat _ ({creates; mods; last; _} as entries) =
+    let Stat.{created; modified; deleted} = stat in
+    if subscriptions_match obj then
+      let last = max last (max modified deleted) in
+      let creates =
+        if created > since then
+          (table, obj, created) :: creates
+        else
+          creates
+      in
+      let mods =
+        if modified > since && not (created > since) then
+          (table, obj, modified) :: mods
+        else
+          mods
+      in
+      {entries with creates; mods; last}
+    else
+      entries
+  in
+  let prepend_deleted_entries obj stat ({deletes; last; _} as entries) =
+    let Stat.{created; modified; deleted} = stat in
+    if subscriptions_match obj then
+      let last = max last (max modified deleted) in
+      let deletes =
+        if created > since then
+          deletes
+        else
+          (table, obj, deleted) :: deletes
+      in
+      {entries with deletes; last}
+    else
+      entries
+  in
+  entries
+  |> Table.fold_over_recent since prepend_recent_entries table_entry
+  |> Table.fold_over_deleted since prepend_deleted_entries table_entry
+
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
   let open From in
@@ -530,78 +588,19 @@ let from_inner __context session subs from from_t deadline =
       else
         (0L, [])
     in
-    ( msg_gen
-    , messages
-    , tableset
-    , List.fold_left
-        (fun acc table ->
-          (* Fold over the live objects *)
-          let acc =
-            Db_cache_types.Table.fold_over_recent !last_generation
-              (fun objref {Db_cache_types.Stat.created; modified; deleted} _
-                   (creates, mods, deletes, last) ->
-                if
-                  Subscription.object_matches subs
-                    (String.lowercase_ascii table)
-                    objref
-                then
-                  let last = max last (max modified deleted) in
-                  (* mtime guaranteed to always be larger than ctime *)
-                  ( ( if created > !last_generation then
-                        (table, objref, created) :: creates
-                      else
-                        creates
-                    )
-                  , ( if
-                        modified > !last_generation
-                        && not (created > !last_generation)
-                      then
-                        (table, objref, modified) :: mods
-                      else
-                        mods
-                    )
-                  , (* Only have a mod event if we don't have a created event *)
-                    deletes
-                  , last
-                  )
-                else
-                  (creates, mods, deletes, last)
-              )
-              (Db_cache_types.TableSet.find table tableset)
-              acc
-          in
-          (* Fold over the deleted objects *)
-          Db_cache_types.Table.fold_over_deleted !last_generation
-            (fun objref {Db_cache_types.Stat.created; modified; deleted}
-                 (creates, mods, deletes, last) ->
-              if
-                Subscription.object_matches subs
-                  (String.lowercase_ascii table)
-                  objref
-              then
-                let last = max last (max modified deleted) in
-                (* mtime guaranteed to always be larger than ctime *)
-                if created > !last_generation then
-                  (creates, mods, deletes, last)
-                (* It was created and destroyed since the last update *)
-                else
-                  (creates, mods, (table, objref, deleted) :: deletes, last)
-              (* It might have been modified, but we can't tell now *)
-              else
-                (creates, mods, deletes, last)
-            )
-            (Db_cache_types.TableSet.find table tableset)
-            acc
-        )
-        ([], [], [], !last_generation)
-        tables
-    )
+    let entries =
+      let beginning = !last_generation in
+      let initial = {creates= []; mods= []; deletes= []; last= beginning} in
+      let folder = collect_events subs tableset beginning in
+      List.fold_left folder initial tables
+    in
+    (msg_gen, messages, tableset, entries)
   in
   (* Each event.from should have an independent subscription record *)
-  let msg_gen, messages, tableset, (creates, mods, deletes, last) =
+  let msg_gen, messages, tableset, {creates; mods; deletes; last} =
     with_call session subs (fun sub ->
         let rec grab_nonempty_range () =
-          let ( (msg_gen, messages, _tableset, (creates, mods, deletes, last))
+          let ( (msg_gen, messages, _tableset, {creates; mods; deletes; last})
                 as result
               ) =
             Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
