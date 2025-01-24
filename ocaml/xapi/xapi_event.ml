@@ -515,7 +515,69 @@ let valid_ref_counts_for tables =
   in
   TableSet.fold count_table tables []
 
-let collect_events subs tableset last_generation entries table =
+let factored subs tableset last_generation =
+  let open Xapi_database in
+  (* Shadow it with a version that doesn't ever change. Semantically
+     equivalent to doing a single dereference, but without rewriting
+     def-use chains. *)
+  let last_generation = ref !last_generation in
+  fun acc table ->
+    (* Fold over the live objects *)
+    let acc =
+      Db_cache_types.Table.fold_over_recent !last_generation
+        (fun objref {Db_cache_types.Stat.created; modified; deleted} _
+             (creates, mods, deletes, last) ->
+          if
+            Subscription.object_matches subs
+              (String.lowercase_ascii table)
+              objref
+          then
+            let last = max last (max modified deleted) in
+            (* mtime guaranteed to always be larger than ctime *)
+            ( ( if created > !last_generation then
+                  (table, objref, created) :: creates
+                else
+                  creates
+              )
+            , ( if
+                  modified > !last_generation && not (created > !last_generation)
+                then
+                  (table, objref, modified) :: mods
+                else
+                  mods
+              )
+            , (* Only have a mod event if we don't have a created event *)
+              deletes
+            , last
+            )
+          else
+            (creates, mods, deletes, last)
+        )
+        (Db_cache_types.TableSet.find table tableset)
+        acc
+    in
+    (* Fold over the deleted objects *)
+    Db_cache_types.Table.fold_over_deleted !last_generation
+      (fun objref {Db_cache_types.Stat.created; modified; deleted}
+           (creates, mods, deletes, last) ->
+        if
+          Subscription.object_matches subs (String.lowercase_ascii table) objref
+        then
+          let last = max last (max modified deleted) in
+          (* mtime guaranteed to always be larger than ctime *)
+          if created > !last_generation then
+            (creates, mods, deletes, last)
+          (* It was created and destroyed since the last update *)
+          else
+            (creates, mods, (table, objref, deleted) :: deletes, last)
+        (* It might have been modified, but we can't tell now *)
+        else
+          (creates, mods, deletes, last)
+      )
+      (Db_cache_types.TableSet.find table tableset)
+      acc
+
+let _collect_events subs tableset last_generation entries table =
   let open Xapi_database in
   let open Db_cache_types in
   let table_entry = TableSet.find table tableset in
@@ -579,16 +641,20 @@ let from_inner __context session subs from from_t deadline =
         (0L, [])
     in
     let last = !last_generation in
-    let acc = {creates= []; mods= []; deletes= []; last} in
-    let folder = collect_events subs tableset last in
+    (* let acc = {creates= []; mods= []; deletes= []; last} in *)
+    let acc = ([], [], [], last) in
+    (* let folder = collect_events subs tableset last in *)
+    let folder = factored subs tableset last_generation in
     let range = List.fold_left folder acc tables in
     (msg_gen, messages, tableset, range)
   in
   (* Each event.from should have an independent subscription record *)
-  let msg_gen, messages, tableset, {creates; mods; deletes; last} =
+  (* let msg_gen, messages, tableset, {creates; mods; deletes; last} = *)
+  let msg_gen, messages, tableset, (creates, mods, deletes, last) =
     with_call session subs (fun sub ->
         let rec grab_nonempty_range () =
-          let ( (msg_gen, messages, _tableset, {creates; mods; deletes; last})
+          (* let ( (msg_gen, messages, _tableset, {creates; mods; deletes; last}) *)
+          let ( (msg_gen, messages, _tableset, (creates, mods, deletes, last))
                 as result
               ) =
             Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
