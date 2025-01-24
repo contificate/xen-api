@@ -596,36 +596,38 @@ let from_inner __context session subs from from_t deadline =
     in
     (msg_gen, messages, tableset, entries)
   in
-  (* Each event.from should have an independent subscription record *)
-  let msg_gen, messages, tableset, {creates; mods; deletes; last} =
-    with_call session subs (fun sub ->
-        let rec grab_nonempty_range () =
-          let ( (msg_gen, messages, _tableset, {creates; mods; deletes; last})
-                as result
-              ) =
-            Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
-          in
-          if
-            creates = []
-            && mods = []
-            && deletes = []
-            && messages = []
-            && Unix.gettimeofday () < deadline
-          then (
-            last_generation := last ;
-            (* Cur_id was bumped, but nothing relevent fell out of the db. Therefore the *)
-            sub.cur_id <- last ;
-            (* last id the client got is equivalent to the current one *)
-            last_msg_gen := msg_gen ;
-            wait2 sub last deadline ;
-            Thread.delay 0.05 ;
-            grab_nonempty_range ()
-          ) else
-            result
-        in
-        grab_nonempty_range ()
-    )
+  let rec grab_non_empty_range call =
+    (* Grab a range of events. If the range is empty and the deadline
+       has not expired, further defer the subscription (call) and try
+       again (iteratively). *)
+    let result =
+      Db_lock.with_lock (fun () -> grab_range (Db_backend.make ()))
+    in
+    let msg_gen, messages, _, entries = result in
+    let {creates; mods; deletes; last} = entries in
+    if
+      creates = []
+      && mods = []
+      && deletes = []
+      && messages = []
+      && Unix.gettimeofday () < deadline
+    then (
+      last_generation := last ;
+      (* cur_id was bumped, but nothing relevent fell out of the
+         DB. Therefore the last id the client got is equivalent to
+         the current one. *)
+      call.cur_id <- last ;
+      last_msg_gen := msg_gen ;
+      wait2 call last deadline ;
+      Thread.delay 0.05 ;
+      (grab_non_empty_range [@tailcall]) call
+    ) else
+      result
   in
+  let msg_gen, messages, tableset, entries =
+    with_call session subs grab_non_empty_range
+  in
+  let {creates; mods; deletes; last} = entries in
   last_generation := last ;
   let event_of op ?snapshot (table, objref, time) =
     {
