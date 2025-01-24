@@ -495,6 +495,16 @@ let generate_events_for =
   List.iter (fun name -> Hashtbl.replace table name ()) event_related_objects ;
   Hashtbl.mem table
 
+let valid_ref_counts_for tables =
+  let open Xapi_database in
+  let open Db_cache_types in
+  let count_table name _ table counts =
+    let name = String.lowercase_ascii name in
+    let count = Table.fold (fun _ _ _ -> Int32.add 1l) table 0l in
+    (name, count) :: counts
+  in
+  TableSet.fold count_table tables []
+
 let from_inner __context session subs from from_t deadline =
   let open Xapi_database in
   let open From in
@@ -668,17 +678,9 @@ let from_inner __context session subs from from_t deadline =
       )
       events messages
   in
-  let valid_ref_counts =
-    Db_cache_types.TableSet.fold
-      (fun tablename _ table acc ->
-        ( String.lowercase_ascii tablename
-        , Db_cache_types.Table.fold (fun _ _ _ acc -> Int32.add 1l acc) table 0l
-        )
-        :: acc
-      )
-      tableset []
-  in
-  {events; valid_ref_counts; token= Token.to_string (last, msg_gen)}
+  let valid_ref_counts = valid_ref_counts_for tableset in
+  let token = Token.to_string (last, msg_gen) in
+  {events; valid_ref_counts; token}
 
 let from ~__context ~classes ~token ~timeout =
   let session = Context.get_session_id __context in
