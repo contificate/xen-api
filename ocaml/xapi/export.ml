@@ -153,19 +153,21 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
 
 (** Walk the graph of objects and update the table of Ref -> ids for each object we wish
     to include in the output. Other object references will be purged. *)
-let create_table () = Hashtbl.create 10
+let create_table () = (Hashtbl.create 64 : (string, string) Hashtbl.t)
 
-(** Convert an internal reference into an external one or NULL *)
-let lookup table r =
-  match Hashtbl.find_opt table r with
-  | Some x ->
-      Ref.of_string x
-  | None ->
-      Ref.null
+(** Convert an internal reference into an external one or NULL. *)
+let lookup table (r : _ Ref.t) =
+  let r = Ref.string_of r in
+  Hashtbl.find_opt table r |> Option.fold ~none:Ref.null ~some:Ref.of_string
 
-(** Convert a list of internal references into external references, filtering out NULLs *)
-let filter table rs =
-  List.filter (fun x -> x <> Ref.null) (List.map (lookup table) rs)
+(** Convert a list of internal references into external references,
+    dropping any that cannot be mapped. *)
+let filter table (rs : _ Ref.t list) =
+  let go r =
+    let r = Ref.string_of r in
+    Hashtbl.find_opt table r |> Option.map Ref.of_string
+  in
+  List.filter_map go rs
 
 (** Convert a Host to an obj *)
 let make_host table __context self =
@@ -196,21 +198,14 @@ let make_host table __context self =
     ; API.host_ha_statefiles= []
     ; API.host_ha_network_peers= []
     ; API.host_tags= []
-    ; API.host_crash_dump_sr=
-        lookup table (Ref.string_of host.API.host_crash_dump_sr)
-    ; API.host_suspend_image_sr=
-        lookup table (Ref.string_of host.API.host_suspend_image_sr)
-    ; API.host_resident_VMs=
-        List.filter (( <> ) Ref.null)
-          (List.map
-             (fun vm -> lookup table (Ref.string_of vm))
-             host.API.host_resident_VMs
-          )
+    ; API.host_crash_dump_sr= lookup table host.API.host_crash_dump_sr
+    ; API.host_suspend_image_sr= lookup table host.API.host_suspend_image_sr
+    ; API.host_resident_VMs= filter table host.API.host_resident_VMs
     }
   in
   {
     cls= Datamodel_common._host
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_host_t host
   }
 
@@ -218,7 +213,7 @@ let make_host table __context self =
 let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
     __context self =
   let vm = Db.VM.get_record ~__context ~self in
-  let vM_VTPMs = filter table (List.map Ref.string_of vm.API.vM_VTPMs) in
+  let vM_VTPMs = filter table vm.API.vM_VTPMs in
   let vm =
     {
       vm with
@@ -230,7 +225,7 @@ let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
         )
     ; API.vM_suspend_VDI=
         ( if preserve_power_state then
-            lookup table (Ref.string_of vm.API.vM_suspend_VDI)
+            lookup table vm.API.vM_suspend_VDI
           else
             Ref.null
         )
@@ -242,7 +237,7 @@ let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
         )
     ; API.vM_snapshot_of=
         ( if with_snapshot_metadata then
-            lookup table (Ref.string_of vm.API.vM_snapshot_of)
+            lookup table vm.API.vM_snapshot_of
           else
             Ref.null
         )
@@ -266,22 +261,22 @@ let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
         )
     ; API.vM_parent=
         ( if with_snapshot_metadata then
-            lookup table (Ref.string_of vm.API.vM_parent)
+            lookup table vm.API.vM_parent
           else
             Ref.null
         )
     ; API.vM_current_operations= []
     ; API.vM_allowed_operations= []
-    ; API.vM_VIFs= filter table (List.map Ref.string_of vm.API.vM_VIFs)
-    ; API.vM_VBDs= filter table (List.map Ref.string_of vm.API.vM_VBDs)
-    ; API.vM_VGPUs= filter table (List.map Ref.string_of vm.API.vM_VGPUs)
+    ; API.vM_VIFs= filter table vm.API.vM_VIFs
+    ; API.vM_VBDs= filter table vm.API.vM_VBDs
+    ; API.vM_VGPUs= filter table vm.API.vM_VGPUs
     ; API.vM_crash_dumps= []
     ; API.vM_VTPMs
-    ; API.vM_resident_on= lookup table (Ref.string_of vm.API.vM_resident_on)
-    ; API.vM_affinity= lookup table (Ref.string_of vm.API.vM_affinity)
+    ; API.vM_resident_on= lookup table vm.API.vM_resident_on
+    ; API.vM_affinity= lookup table vm.API.vM_affinity
     ; API.vM_consoles= []
-    ; API.vM_metrics= lookup table (Ref.string_of vm.API.vM_metrics)
-    ; API.vM_guest_metrics= lookup table (Ref.string_of vm.API.vM_guest_metrics)
+    ; API.vM_metrics= lookup table vm.API.vM_metrics
+    ; API.vM_guest_metrics= lookup table vm.API.vM_guest_metrics
     ; API.vM_protection_policy= Ref.null
     ; API.vM_bios_strings= vm.API.vM_bios_strings
     ; API.vM_blobs= []
@@ -289,7 +284,7 @@ let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
   in
   {
     cls= Datamodel_common._vm
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vM_t vm
   }
 
@@ -298,7 +293,7 @@ let make_vmm table __context self =
   let vmm = Db.VM_metrics.get_record ~__context ~self in
   {
     cls= Datamodel_common._vm_metrics
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vM_metrics_t vmm
   }
 
@@ -307,7 +302,7 @@ let make_gm table __context self =
   let gm = Db.VM_guest_metrics.get_record ~__context ~self in
   {
     cls= Datamodel_common._vm_guest_metrics
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vM_guest_metrics_t gm
   }
 
@@ -323,8 +318,8 @@ let make_vif table ~preserve_power_state __context self =
           else
             false
         )
-    ; API.vIF_network= lookup table (Ref.string_of vif.API.vIF_network)
-    ; API.vIF_VM= lookup table (Ref.string_of vif.API.vIF_VM)
+    ; API.vIF_network= lookup table vif.API.vIF_network
+    ; API.vIF_VM= lookup table vif.API.vIF_VM
     ; API.vIF_metrics= Ref.null
     ; API.vIF_current_operations= []
     ; API.vIF_allowed_operations= []
@@ -332,7 +327,7 @@ let make_vif table ~preserve_power_state __context self =
   in
   {
     cls= Datamodel_common._vif
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vIF_t vif
   }
 
@@ -342,8 +337,7 @@ let make_network table __context self =
   let net =
     {
       net with
-      API.network_VIFs=
-        filter table (List.map Ref.string_of net.API.network_VIFs)
+      API.network_VIFs= filter table net.API.network_VIFs
     ; API.network_PIFs= []
     ; API.network_current_operations= []
     ; API.network_allowed_operations= []
@@ -351,7 +345,7 @@ let make_network table __context self =
   in
   {
     cls= Datamodel_common._network
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_network_t net
   }
 
@@ -367,8 +361,8 @@ let make_vbd table ~preserve_power_state __context self =
           else
             false
         )
-    ; API.vBD_VDI= lookup table (Ref.string_of vbd.API.vBD_VDI)
-    ; API.vBD_VM= lookup table (Ref.string_of vbd.API.vBD_VM)
+    ; API.vBD_VDI= lookup table vbd.API.vBD_VDI
+    ; API.vBD_VM= lookup table vbd.API.vBD_VM
     ; API.vBD_metrics= Ref.null
     ; API.vBD_current_operations= []
     ; API.vBD_allowed_operations= []
@@ -376,7 +370,7 @@ let make_vbd table ~preserve_power_state __context self =
   in
   {
     cls= Datamodel_common._vbd
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vBD_t vbd
   }
 
@@ -386,16 +380,16 @@ let make_vdi table __context self =
   let vdi =
     {
       vdi with
-      API.vDI_VBDs= filter table (List.map Ref.string_of vdi.API.vDI_VBDs)
+      API.vDI_VBDs= filter table vdi.API.vDI_VBDs
     ; API.vDI_crash_dumps= []
-    ; API.vDI_SR= lookup table (Ref.string_of vdi.API.vDI_SR)
+    ; API.vDI_SR= lookup table vdi.API.vDI_SR
     ; API.vDI_current_operations= []
     ; API.vDI_allowed_operations= []
     }
   in
   {
     cls= Datamodel_common._vdi
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vDI_t vdi
   }
 
@@ -405,7 +399,7 @@ let make_sr table __context self =
   let sr =
     {
       sr with
-      API.sR_VDIs= filter table (List.map Ref.string_of sr.API.sR_VDIs)
+      API.sR_VDIs= filter table sr.API.sR_VDIs
     ; API.sR_PBDs= []
     ; API.sR_current_operations= []
     ; API.sR_allowed_operations= []
@@ -413,7 +407,7 @@ let make_sr table __context self =
   in
   {
     cls= Datamodel_common._sr
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_sR_t sr
   }
 
@@ -422,7 +416,7 @@ let make_vgpu_type table __context self =
   let vgpu_type = Db.VGPU_type.get_record ~__context ~self in
   {
     cls= Datamodel_common._vgpu_type
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vGPU_type_t vgpu_type
   }
 
@@ -438,14 +432,14 @@ let make_vgpu table ~preserve_power_state __context self =
           else
             false
         )
-    ; API.vGPU_GPU_group= lookup table (Ref.string_of vgpu.API.vGPU_GPU_group)
-    ; API.vGPU_type= lookup table (Ref.string_of vgpu.API.vGPU_type)
-    ; API.vGPU_VM= lookup table (Ref.string_of vgpu.API.vGPU_VM)
+    ; API.vGPU_GPU_group= lookup table vgpu.API.vGPU_GPU_group
+    ; API.vGPU_type= lookup table vgpu.API.vGPU_type
+    ; API.vGPU_VM= lookup table vgpu.API.vGPU_VM
     }
   in
   {
     cls= Datamodel_common._vgpu
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_vGPU_t vgpu
   }
 
@@ -455,20 +449,19 @@ let make_gpu_group table __context self =
   let group =
     {
       group with
-      API.gPU_group_VGPUs=
-        filter table (List.map Ref.string_of group.API.gPU_group_VGPUs)
+      API.gPU_group_VGPUs= filter table group.API.gPU_group_VGPUs
     ; API.gPU_group_PGPUs= []
     }
   in
   {
     cls= Datamodel_common._gpu_group
-  ; id= Ref.string_of (lookup table (Ref.string_of self))
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_gPU_group_t group
   }
 
 let make_pvs_proxies table __context self =
   debug "exporting PVS Proxy %s" (Ref.string_of self) ;
-  let lookup' ref = lookup table (Ref.string_of ref) in
+  let lookup' ref = lookup table ref in
   let proxy = Db.PVS_proxy.get_record ~__context ~self in
   let proxy =
     {
@@ -486,26 +479,24 @@ let make_pvs_proxies table __context self =
 
 let make_pvs_sites table __context self =
   debug "exporting PVS Site %s" (Ref.string_of self) ;
-  let lookup' ref = lookup table (Ref.string_of ref) in
-  let filter' refs = filter table (List.map Ref.string_of refs) in
   let site = Db.PVS_site.get_record ~__context ~self in
   let site =
     {
       site with
       API.pVS_site_cache_storage= [] (* don't export *)
     ; API.pVS_site_servers= [] (* don't export *)
-    ; API.pVS_site_proxies= filter' site.API.pVS_site_proxies
+    ; API.pVS_site_proxies= filter table site.API.pVS_site_proxies
     }
   in
   {
     cls= Datamodel_common._pvs_site
-  ; id= Ref.string_of (lookup' self)
+  ; id= Ref.string_of (lookup table self)
   ; snapshot= API.rpc_of_pVS_site_t site
   }
 
 let make_vtpm table __context self =
   debug "exporting vtpm %s" (Ref.string_of self) ;
-  let lookup' ref = lookup table (Ref.string_of ref) in
+  let lookup' ref = lookup table ref in
   let vtpm = Db.VTPM.get_record ~__context ~self in
   let secret = Xapi_vtpm.get_contents ~__context ~self in
   (* we are using a hand-crafted record that we serialise. The default
@@ -526,9 +517,6 @@ let make_vtpm table __context self =
   }
 
 let make_all ~with_snapshot_metadata ~preserve_power_state table __context =
-  let filter table rs =
-    List.filter (fun x -> lookup table (Ref.string_of x) <> Ref.null) rs
-  in
   let hosts =
     List.map
       (make_host table __context)
