@@ -51,8 +51,14 @@ let make_id =
     incr counter ;
     "Ref:" ^ string_of_int this
 
-let rec update_table ~__context ~include_snapshots ~preserve_power_state
-    ~include_vhd_parents ~table ~excluded_devices vm =
+type export_config = {
+    include_snapshots: bool
+  ; preserve_power_state: bool
+  ; include_vhd_parents: bool
+  ; excluded_devices: Devicetype.t list
+}
+
+let rec update_table ~__context ~config ~table vm =
   let add r =
     if not (Hashtbl.mem table (Ref.string_of r)) then
       Hashtbl.add table (Ref.string_of r) (make_id ())
@@ -61,7 +67,7 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
     add v ;
     let r = Db.VDI.get_record ~__context ~self:v in
     add r.API.vDI_SR ;
-    if include_vhd_parents then
+    if config.include_vhd_parents then
       let sm_config = r.API.vDI_sm_config in
       if List.mem_assoc Xapi_globs.vhd_parent sm_config then
         let parent_uuid = List.assoc Xapi_globs.vhd_parent sm_config in
@@ -77,7 +83,7 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
   then (
     add vm ;
     let vm = Db.VM.get_record ~__context ~self:vm in
-    if not (List.mem Devicetype.VIF excluded_devices) then
+    if not (List.mem Devicetype.VIF config.excluded_devices) then
       List.iter
         (fun vif ->
           if Db.is_valid_ref __context vif then (
@@ -87,7 +93,7 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
           )
         )
         vm.API.vM_VIFs ;
-    if not (List.mem Devicetype.VBD excluded_devices) then
+    if not (List.mem Devicetype.VBD config.excluded_devices) then
       List.iter
         (fun vbd ->
           if Db.is_valid_ref __context vbd then (
@@ -97,7 +103,7 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
           )
         )
         vm.API.vM_VBDs ;
-    if not (List.mem Devicetype.VGPU excluded_devices) then
+    if not (List.mem Devicetype.VGPU config.excluded_devices) then
       List.iter
         (fun vgpu ->
           if Db.is_valid_ref __context vgpu then (
@@ -119,22 +125,22 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
         )
     ) ;
     (* add VTPMs that belong to this VM *)
-    if not (List.mem Devicetype.VTPM excluded_devices) then
+    if not (List.mem Devicetype.VTPM config.excluded_devices) then
       vm.API.vM_VTPMs
       |> List.iter (fun ref -> if Db.is_valid_ref __context ref then add ref) ;
 
     (* If we need to include snapshots, update the table for VMs in the 'snapshots' field *)
-    if include_snapshots then
+    if config.include_snapshots then
       List.iter
-        (fun snap ->
-          update_table ~__context ~include_snapshots:false ~preserve_power_state
-            ~include_vhd_parents ~table ~excluded_devices snap
+        (update_table ~__context
+           ~config:{config with include_snapshots= false}
+           ~table
         )
         vm.API.vM_snapshots ;
     (* If VM is suspended then add the suspend_VDI *)
     let vdi = vm.API.vM_suspend_VDI in
     if
-      preserve_power_state
+      config.preserve_power_state
       && vm.API.vM_power_state = `Suspended
       && Db.is_valid_ref __context vdi
     then
@@ -146,9 +152,9 @@ let rec update_table ~__context ~include_snapshots ~preserve_power_state
     add vm.API.vM_resident_on ;
     add vm.API.vM_affinity ;
     (* Add the parent VM *)
-    if include_snapshots && Db.is_valid_ref __context vm.API.vM_parent then
-      update_table ~__context ~include_snapshots:false ~preserve_power_state
-        ~include_vhd_parents ~table ~excluded_devices vm.API.vM_parent
+    if config.include_snapshots && Db.is_valid_ref __context vm.API.vM_parent
+    then
+      update_table ~__context ~config ~table vm.API.vM_parent
   )
 
 (** Walk the graph of objects and update the table of Ref -> ids for each object we wish
@@ -609,14 +615,10 @@ let make_all ~include_snapshots ~preserve_power_state table __context =
 (* on normal export, do not include snapshot metadata;
    on metadata-export, include snapshots fields of the exported VM as well as the VM records of VMs
    which are snapshots of the exported VM. *)
-let vm_metadata ~include_snapshots ~preserve_power_state ~include_vhd_parents
-    ~__context ~vms ~excluded_devices =
+let vm_metadata ~__context ~config ~vms =
+  let {include_snapshots; preserve_power_state} = config in
   let table = create_table () in
-  List.iter
-    (update_table ~__context ~include_snapshots ~preserve_power_state
-       ~include_vhd_parents ~table ~excluded_devices
-    )
-    vms ;
+  List.iter (update_table ~__context ~config ~table) vms ;
   let objects =
     make_all ~include_snapshots ~preserve_power_state table __context
   in
@@ -632,16 +634,17 @@ let string_of_vm ~__context vm =
   with _ -> "invalid"
 
 (** Export a VM's metadata only *)
-let export_metadata ~__context ~include_snapshots ~preserve_power_state
-    ~include_vhd_parents ~vms ~excluded_devices s =
+let export_metadata ~__context ~config ~vms s =
   let infomsg vm =
     info
       "VM.export_metadata: VM = %s; include_snapshots = '%b'; \
        include_vhd_parents = '%b'; preserve_power_state = '%s'; \
        excluded_devices = '%s'"
-      vm include_snapshots include_vhd_parents
-      (string_of_bool preserve_power_state)
-      (String.concat ", " (List.map Devicetype.to_string excluded_devices))
+      vm config.include_snapshots config.include_vhd_parents
+      (string_of_bool config.preserve_power_state)
+      (String.concat ", "
+         (List.map Devicetype.to_string config.excluded_devices)
+      )
   in
   let now = Date.now () |> Date.to_unix_time |> Int64.of_float in
   ( match vms with
@@ -652,10 +655,7 @@ let export_metadata ~__context ~include_snapshots ~preserve_power_state
   | vms ->
       infomsg (String.concat ", " (List.map (string_of_vm ~__context) vms))
   ) ;
-  let _, ova_xml =
-    vm_metadata ~include_snapshots ~preserve_power_state ~include_vhd_parents
-      ~__context ~vms ~excluded_devices
-  in
+  let _, ova_xml = vm_metadata ~__context ~config ~vms in
   let hdr =
     Tar.Header.make ~mod_time:now Xapi_globs.ova_xml_filename
       (Int64.of_int @@ String.length ova_xml)
@@ -669,10 +669,15 @@ let export refresh_session __context rpc session_id s vm_ref
   info "VM.export: VM = %s; preserve_power_state = '%s'"
     (string_of_vm ~__context vm_ref)
     (string_of_bool preserve_power_state) ;
-  let table, ova_xml =
-    vm_metadata ~include_snapshots:false ~preserve_power_state
-      ~include_vhd_parents:false ~__context ~vms:[vm_ref] ~excluded_devices:[]
+  let config =
+    {
+      include_snapshots= false
+    ; preserve_power_state
+    ; include_vhd_parents= false
+    ; excluded_devices= []
+    }
   in
+  let table, ova_xml = vm_metadata ~__context ~config ~vms:[vm_ref] in
   debug "Outputting ova.xml" ;
   let hdr =
     Tar.Header.make ~mod_time:now Xapi_globs.ova_xml_filename
@@ -831,9 +836,15 @@ let metadata_handler (req : Request.t) s _ =
                          locked_vms := vm :: !locked_vms
                        )
                        vm_refs ;
-                     export_metadata ~include_snapshots:export_snapshots
-                       ~preserve_power_state:true ~include_vhd_parents
-                       ~excluded_devices ~__context ~vms:vm_refs write_fd
+                     let config =
+                       {
+                         include_snapshots= export_snapshots
+                       ; preserve_power_state= true
+                       ; include_vhd_parents
+                       ; excluded_devices
+                       }
+                     in
+                     export_metadata ~__context ~config ~vms:vm_refs write_fd
                    )
                    (fun () ->
                      Unix.close write_fd ;
