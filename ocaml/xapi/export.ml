@@ -210,8 +210,8 @@ let make_host table __context self =
   }
 
 (** Convert a VM reference to an obj *)
-let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
-    __context self =
+let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
+    self =
   let vm = Db.VM.get_record ~__context ~self in
   let vM_VTPMs = filter table vm.API.vM_VTPMs in
   let vm =
@@ -230,37 +230,37 @@ let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
             Ref.null
         )
     ; API.vM_is_a_snapshot=
-        ( if with_snapshot_metadata then
+        ( if include_snapshots then
             vm.API.vM_is_a_snapshot
           else
             false
         )
     ; API.vM_snapshot_of=
-        ( if with_snapshot_metadata then
+        ( if include_snapshots then
             lookup table vm.API.vM_snapshot_of
           else
             Ref.null
         )
     ; API.vM_snapshots=
-        ( if with_snapshot_metadata then
+        ( if include_snapshots then
             vm.API.vM_snapshots
           else
             []
         )
     ; API.vM_snapshot_time=
-        ( if with_snapshot_metadata then
+        ( if include_snapshots then
             vm.API.vM_snapshot_time
           else
             Date.epoch
         )
     ; API.vM_transportable_snapshot_id=
-        ( if with_snapshot_metadata then
+        ( if include_snapshots then
             vm.API.vM_transportable_snapshot_id
           else
             ""
         )
     ; API.vM_parent=
-        ( if with_snapshot_metadata then
+        ( if include_snapshots then
             lookup table vm.API.vM_parent
           else
             Ref.null
@@ -516,7 +516,7 @@ let make_vtpm table __context self =
   ; snapshot= rpc_of_vtpm' vtpm'
   }
 
-let make_all ~with_snapshot_metadata ~preserve_power_state table __context =
+let make_all ~include_snapshots ~preserve_power_state table __context =
   let hosts =
     List.map
       (make_host table __context)
@@ -524,7 +524,7 @@ let make_all ~with_snapshot_metadata ~preserve_power_state table __context =
   in
   let vms =
     List.map
-      (make_vm ~with_snapshot_metadata ~preserve_power_state table __context)
+      (make_vm ~include_snapshots ~preserve_power_state table __context)
       (filter table (Db.VM.get_all ~__context))
   in
   let vmms =
@@ -609,16 +609,16 @@ let make_all ~with_snapshot_metadata ~preserve_power_state table __context =
 (* on normal export, do not include snapshot metadata;
    on metadata-export, include snapshots fields of the exported VM as well as the VM records of VMs
    which are snapshots of the exported VM. *)
-let vm_metadata ~with_snapshot_metadata ~preserve_power_state
-    ~include_vhd_parents ~__context ~vms ~excluded_devices =
+let vm_metadata ~include_snapshots ~preserve_power_state ~include_vhd_parents
+    ~__context ~vms ~excluded_devices =
   let table = create_table () in
   List.iter
-    (update_table ~__context ~include_snapshots:with_snapshot_metadata
-       ~preserve_power_state ~include_vhd_parents ~table ~excluded_devices
+    (update_table ~__context ~include_snapshots ~preserve_power_state
+       ~include_vhd_parents ~table ~excluded_devices
     )
     vms ;
   let objects =
-    make_all ~with_snapshot_metadata ~preserve_power_state table __context
+    make_all ~include_snapshots ~preserve_power_state table __context
   in
   let header = {version= this_version __context; objects} in
   let ova_xml = Xmlrpc.to_string (rpc_of_header header) in
@@ -632,14 +632,14 @@ let string_of_vm ~__context vm =
   with _ -> "invalid"
 
 (** Export a VM's metadata only *)
-let export_metadata ~__context ~with_snapshot_metadata ~preserve_power_state
+let export_metadata ~__context ~include_snapshots ~preserve_power_state
     ~include_vhd_parents ~vms ~excluded_devices s =
   let infomsg vm =
     info
-      "VM.export_metadata: VM = %s; with_snapshot_metadata = '%b'; \
+      "VM.export_metadata: VM = %s; include_snapshots = '%b'; \
        include_vhd_parents = '%b'; preserve_power_state = '%s'; \
        excluded_devices = '%s'"
-      vm with_snapshot_metadata include_vhd_parents
+      vm include_snapshots include_vhd_parents
       (string_of_bool preserve_power_state)
       (String.concat ", " (List.map Devicetype.to_string excluded_devices))
   in
@@ -653,8 +653,8 @@ let export_metadata ~__context ~with_snapshot_metadata ~preserve_power_state
       infomsg (String.concat ", " (List.map (string_of_vm ~__context) vms))
   ) ;
   let _, ova_xml =
-    vm_metadata ~with_snapshot_metadata ~preserve_power_state
-      ~include_vhd_parents ~__context ~vms ~excluded_devices
+    vm_metadata ~include_snapshots ~preserve_power_state ~include_vhd_parents
+      ~__context ~vms ~excluded_devices
   in
   let hdr =
     Tar.Header.make ~mod_time:now Xapi_globs.ova_xml_filename
@@ -670,7 +670,7 @@ let export refresh_session __context rpc session_id s vm_ref
     (string_of_vm ~__context vm_ref)
     (string_of_bool preserve_power_state) ;
   let table, ova_xml =
-    vm_metadata ~with_snapshot_metadata:false ~preserve_power_state
+    vm_metadata ~include_snapshots:false ~preserve_power_state
       ~include_vhd_parents:false ~__context ~vms:[vm_ref] ~excluded_devices:[]
   in
   debug "Outputting ova.xml" ;
@@ -831,7 +831,7 @@ let metadata_handler (req : Request.t) s _ =
                          locked_vms := vm :: !locked_vms
                        )
                        vm_refs ;
-                     export_metadata ~with_snapshot_metadata:export_snapshots
+                     export_metadata ~include_snapshots:export_snapshots
                        ~preserve_power_state:true ~include_vhd_parents
                        ~excluded_devices ~__context ~vms:vm_refs write_fd
                    )
