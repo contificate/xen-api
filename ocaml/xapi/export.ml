@@ -40,16 +40,7 @@ open Xapi_stdext_pervasives.Pervasiveext
 module Date = Clock.Date
 module Unixext = Xapi_stdext_unix.Unixext
 
-module D = Debug.Make (struct let name = "export" end)
-
-open D
-
-let make_id =
-  let counter = ref 0 in
-  fun () ->
-    let this = !counter in
-    incr counter ;
-    "Ref:" ^ string_of_int this
+open Debug.Make (struct let name = "export" end)
 
 type export_config = {
     include_snapshots: bool
@@ -58,14 +49,37 @@ type export_config = {
   ; excluded_devices: Devicetype.t list
 }
 
+module RefTable = struct
+  type t = {refs: (string, string) Hashtbl.t; mutable counter: int}
+
+  let create () =
+    let refs = Hashtbl.create 64 in
+    let counter = 0 in
+    {refs; counter}
+
+  let fresh t =
+    let r = Printf.sprintf "Ref:%d" t.counter in
+    t.counter <- t.counter + 1 ;
+    r
+
+  let insert t r =
+    let r = Ref.string_of r in
+    if not (Hashtbl.mem t.refs r) then
+      let r' = fresh t in
+      Hashtbl.replace t.refs r r'
+
+  let contains t r = Hashtbl.mem t.refs (Ref.string_of r)
+
+  let find_opt t r =
+    Ref.string_of r |> Hashtbl.find_opt t.refs |> Option.map Ref.of_string
+end
+
 let rec update_table ~__context ~config ~table vm =
-  let add r =
-    if not (Hashtbl.mem table (Ref.string_of r)) then
-      Hashtbl.add table (Ref.string_of r) (make_id ())
-  in
+  let add r = RefTable.insert table r in
+  let seen r = RefTable.contains table r in
   let rec add_vdi v =
-    add v ;
     let r = Db.VDI.get_record ~__context ~self:v in
+    add v ;
     add r.API.vDI_SR ;
     if config.include_vhd_parents then
       let sm_config = r.API.vDI_sm_config in
@@ -74,13 +88,11 @@ let rec update_table ~__context ~config ~table vm =
         try
           let parent_ref = Db.VDI.get_by_uuid ~__context ~uuid:parent_uuid in
           (* Only recurse if we haven't already seen this VDI *)
-          if not (Hashtbl.mem table (Ref.string_of parent_ref)) then
-            add_vdi parent_ref
+          if not (seen parent_ref) then add_vdi parent_ref
         with _ ->
           warn "VM.export_metadata: lookup of parent VDI %s failed" parent_uuid
   in
-  if Db.is_valid_ref __context vm && not (Hashtbl.mem table (Ref.string_of vm))
-  then (
+  if Db.is_valid_ref __context vm && not (seen vm) then (
     add vm ;
     let vm = Db.VM.get_record ~__context ~self:vm in
     if not (List.mem Devicetype.VIF config.excluded_devices) then
@@ -157,23 +169,12 @@ let rec update_table ~__context ~config ~table vm =
       update_table ~__context ~config ~table vm.API.vM_parent
   )
 
-(** Walk the graph of objects and update the table of Ref -> ids for each object we wish
-    to include in the output. Other object references will be purged. *)
-let create_table () = (Hashtbl.create 64 : (string, string) Hashtbl.t)
-
 (** Convert an internal reference into an external one or NULL. *)
-let lookup table (r : _ Ref.t) =
-  let r = Ref.string_of r in
-  Hashtbl.find_opt table r |> Option.fold ~none:Ref.null ~some:Ref.of_string
+let lookup table r = RefTable.find_opt table r |> Option.value ~default:Ref.null
 
 (** Convert a list of internal references into external references,
     dropping any that cannot be mapped. *)
-let filter table (rs : _ Ref.t list) =
-  let go r =
-    let r = Ref.string_of r in
-    Hashtbl.find_opt table r |> Option.map Ref.of_string
-  in
-  List.filter_map go rs
+let filter table rs = List.filter_map (RefTable.find_opt table) rs
 
 (** Convert a Host to an obj *)
 let make_host table __context self =
@@ -218,8 +219,10 @@ let make_host table __context self =
 (** Convert a VM reference to an obj *)
 let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
     self =
+  let lookup r = lookup table r in
+  let filter rs = filter table rs in
   let vm = Db.VM.get_record ~__context ~self in
-  let vM_VTPMs = filter table vm.API.vM_VTPMs in
+  let vM_VTPMs = filter vm.API.vM_VTPMs in
   let vm =
     {
       vm with
@@ -231,7 +234,7 @@ let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
         )
     ; API.vM_suspend_VDI=
         ( if preserve_power_state then
-            lookup table vm.API.vM_suspend_VDI
+            lookup vm.API.vM_suspend_VDI
           else
             Ref.null
         )
@@ -243,13 +246,13 @@ let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
         )
     ; API.vM_snapshot_of=
         ( if include_snapshots then
-            lookup table vm.API.vM_snapshot_of
+            lookup vm.API.vM_snapshot_of
           else
             Ref.null
         )
     ; API.vM_snapshots=
         ( if include_snapshots then
-            filter table vm.API.vM_snapshots
+            filter vm.API.vM_snapshots
           else
             []
         )
@@ -267,22 +270,22 @@ let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
         )
     ; API.vM_parent=
         ( if include_snapshots then
-            lookup table vm.API.vM_parent
+            lookup vm.API.vM_parent
           else
             Ref.null
         )
     ; API.vM_current_operations= []
     ; API.vM_allowed_operations= []
-    ; API.vM_VIFs= filter table vm.API.vM_VIFs
-    ; API.vM_VBDs= filter table vm.API.vM_VBDs
-    ; API.vM_VGPUs= filter table vm.API.vM_VGPUs
+    ; API.vM_VIFs= filter vm.API.vM_VIFs
+    ; API.vM_VBDs= filter vm.API.vM_VBDs
+    ; API.vM_VGPUs= filter vm.API.vM_VGPUs
     ; API.vM_crash_dumps= []
     ; API.vM_VTPMs
-    ; API.vM_resident_on= lookup table vm.API.vM_resident_on
-    ; API.vM_affinity= lookup table vm.API.vM_affinity
+    ; API.vM_resident_on= lookup vm.API.vM_resident_on
+    ; API.vM_affinity= lookup vm.API.vM_affinity
     ; API.vM_consoles= []
-    ; API.vM_metrics= lookup table vm.API.vM_metrics
-    ; API.vM_guest_metrics= lookup table vm.API.vM_guest_metrics
+    ; API.vM_metrics= lookup vm.API.vM_metrics
+    ; API.vM_guest_metrics= lookup vm.API.vM_guest_metrics
     ; API.vM_protection_policy= Ref.null
     ; API.vM_bios_strings= vm.API.vM_bios_strings
     ; API.vM_blobs= []
@@ -290,7 +293,7 @@ let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
   in
   {
     cls= Datamodel_common._vm
-  ; id= Ref.string_of (lookup table self)
+  ; id= Ref.string_of (lookup self)
   ; snapshot= API.rpc_of_vM_t vm
   }
 
@@ -522,7 +525,8 @@ let make_vtpm table __context self =
   ; snapshot= rpc_of_vtpm' vtpm'
   }
 
-let make_all ~include_snapshots ~preserve_power_state table __context =
+let make_all ~include_snapshots ~preserve_power_state (table : RefTable.t)
+    __context =
   let hosts =
     List.map
       (make_host table __context)
@@ -617,7 +621,7 @@ let make_all ~include_snapshots ~preserve_power_state table __context =
    which are snapshots of the exported VM. *)
 let vm_metadata ~__context ~config ~vms =
   let {include_snapshots; preserve_power_state} = config in
-  let table = create_table () in
+  let table = RefTable.create () in
   List.iter (update_table ~__context ~config ~table) vms ;
   let objects =
     make_all ~include_snapshots ~preserve_power_state table __context
@@ -707,18 +711,18 @@ let export refresh_session __context rpc session_id s vm_ref
       )
       vdis
   in
+  let vdis = List.filter (RefTable.contains table) vdis in
   let vdis =
-    List.filter (fun vdi -> Hashtbl.mem table (Ref.string_of vdi)) vdis
-  in
-  let vdis =
-    List.map
-      (fun vdi ->
-        ( Hashtbl.find table (Ref.string_of vdi)
-        , vdi
-        , Db.VDI.get_virtual_size ~__context ~self:vdi
-        )
-      )
-      vdis
+    let tabulate vdi =
+      match RefTable.find_opt table vdi with
+      | Some ext_ref ->
+          let dir_prefix = Ref.string_of ext_ref in
+          let size = Db.VDI.get_virtual_size ~__context ~self:vdi in
+          Some (dir_prefix, vdi, size)
+      | _ ->
+          None
+    in
+    List.filter_map tabulate vdis
   in
   Stream_vdi.send_all refresh_session s ~__context rpc session_id vdis ;
   (* We no longer write the end-of-tar checksum table, preferring the inline ones instead *)

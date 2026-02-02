@@ -236,7 +236,7 @@ let wait_until_sr_is_ready ~__context ~sr =
 (* This function uses the VM export functionality to *)
 (* create the objects required to reimport a list of VMs *)
 let create_import_objects ~__context ~vms =
-  let table = Export.create_table () in
+  let table = Export.RefTable.create () in
   let config =
     Export.
       {
