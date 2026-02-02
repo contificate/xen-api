@@ -249,7 +249,7 @@ let make_vm ?(include_snapshots = false) ~preserve_power_state table __context
         )
     ; API.vM_snapshots=
         ( if include_snapshots then
-            vm.API.vM_snapshots
+            filter table vm.API.vM_snapshots
           else
             []
         )
