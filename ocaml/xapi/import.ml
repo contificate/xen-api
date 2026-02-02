@@ -2073,7 +2073,38 @@ let handlers =
   ; (Datamodel_common._vtpm, VTPMHandler.handle)
   ]
 
-let update_snapshot_and_parent_links ~__context state =
+(* If snapshot_of(x) = y, and both x and y are freshly imported VDIs,
+   the field must be rewritten to a real database reference.
+
+   We can't do this on-the-fly during an import because we can't
+   guarantee that the VDIs will be imported in reverse topological
+   order of the relation induced by snapshot_of. *)
+let update_vdi_links ~__context state =
+  (* Map an exported reference to a (freshly) imported reference. *)
+  let resolve_import =
+    let tbl = Hashtbl.create 16 in
+    let go (_, a, b) = Hashtbl.replace tbl a (Ref.of_string b) in
+    List.iter go state.table ; Hashtbl.find_opt tbl
+  in
+  (* If snapshot(x) = y and y has also just been imported, update x to
+     reference the proper object. *)
+  let update x =
+    let x_r = Db.VDI.get_record ~__context ~self:x in
+    let link = Ref.string_of x_r.API.vDI_snapshot_of in
+    match resolve_import link with
+    | Some y ->
+        Db.VDI.set_snapshot_of ~__context ~self:x ~value:y ;
+        let x, y = Ref.(string_of x, string_of y) in
+        debug "%s: resolved snapshot_of(%s) = %s => %s" __FUNCTION__ x link y
+    | _ ->
+        ()
+  in
+  let go (cls, _, r) =
+    if cls = Datamodel_common._vdi then update (Ref.of_string r)
+  in
+  List.iter go state.table
+
+let update_vm_links ~__context state =
   let aux (cls, _, ref) =
     let ref = Ref.of_string ref in
     ( if
@@ -2124,7 +2155,10 @@ let handle_all __context config rpc session_id (xs : obj list) =
       | _ ->
           false
     in
-    if not dry_run then update_snapshot_and_parent_links ~__context state ;
+    if not dry_run then begin
+      update_vdi_links ~__context state ;
+      update_vm_links ~__context state
+    end ;
     state
   with e ->
     Backtrace.is_important e ;
