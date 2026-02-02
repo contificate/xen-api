@@ -248,7 +248,7 @@ let make_vm ?(with_snapshot_metadata = false) ~preserve_power_state table
         )
     ; API.vM_snapshots=
         ( if with_snapshot_metadata then
-            vm.API.vM_snapshots
+            filter table (List.map Ref.string_of vm.API.vM_snapshots)
           else
             []
         )
