@@ -77,6 +77,7 @@ end
 let rec update_table ~__context ~config ~table vm =
   let add r = RefTable.insert table r in
   let seen r = RefTable.contains table r in
+  let should_export dev = not (List.mem dev config.excluded_devices) in
   let rec add_vdi v =
     let r = Db.VDI.get_record ~__context ~self:v in
     add v ;
@@ -95,7 +96,7 @@ let rec update_table ~__context ~config ~table vm =
   if Db.is_valid_ref __context vm && not (seen vm) then (
     add vm ;
     let vm = Db.VM.get_record ~__context ~self:vm in
-    if not (List.mem Devicetype.VIF config.excluded_devices) then
+    if should_export Devicetype.VIF then
       List.iter
         (fun vif ->
           if Db.is_valid_ref __context vif then (
@@ -105,7 +106,7 @@ let rec update_table ~__context ~config ~table vm =
           )
         )
         vm.API.vM_VIFs ;
-    if not (List.mem Devicetype.VBD config.excluded_devices) then
+    if should_export Devicetype.VBD then
       List.iter
         (fun vbd ->
           if Db.is_valid_ref __context vbd then (
@@ -115,7 +116,7 @@ let rec update_table ~__context ~config ~table vm =
           )
         )
         vm.API.vM_VBDs ;
-    if not (List.mem Devicetype.VGPU config.excluded_devices) then
+    if should_export Devicetype.VGPU then
       List.iter
         (fun vgpu ->
           if Db.is_valid_ref __context vgpu then (
@@ -137,7 +138,7 @@ let rec update_table ~__context ~config ~table vm =
         )
     ) ;
     (* add VTPMs that belong to this VM *)
-    if not (List.mem Devicetype.VTPM config.excluded_devices) then
+    if should_export Devicetype.VTPM then
       vm.API.vM_VTPMs
       |> List.iter (fun ref -> if Db.is_valid_ref __context ref then add ref) ;
 
