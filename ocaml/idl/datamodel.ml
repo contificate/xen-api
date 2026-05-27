@@ -11231,6 +11231,7 @@ let http_actions =
       )
     )
   ; ("put_bundle", (Put, Constants.put_bundle_uri, true, [], _R_POOL_OP, []))
+  ; ("get_websocket", (Get, "/websocket", false, [], _R_READ_ONLY, []))
   ]
 
 (* Actions that incorporate the rate limiter from Xapi_rate_limiting within
@@ -11261,6 +11262,7 @@ let public_http_actions_with_no_rbac_check =
   ; "post_jsonrpc"
   ; "post_jsonrpc_options"
   ; "get_pool_update_download"
+  ; "get_websocket"
   ]
 
 (* permissions not associated with any object message or field *)

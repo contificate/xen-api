@@ -872,6 +872,7 @@ let common_http_handlers () =
     ; ("get_pool_update_download", Xapi_pool_update.pool_update_download_handler)
     ; ("get_host_updates", Xapi_host.get_host_updates_handler)
     ; ("put_bundle", Xapi_pool.put_bundle_handler)
+    ; ("get_websocket", Xapi_websocket.websocket_upgrade_handler)
     ]
   in
   if !Xapi_globs.disable_webserver then
