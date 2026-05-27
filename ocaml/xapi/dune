@@ -163,6 +163,7 @@
   pam
   pciutil
   pci
+  polly
   psq
   ptime
   ptime.clock.os
