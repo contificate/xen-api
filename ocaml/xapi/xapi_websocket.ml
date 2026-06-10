@@ -214,6 +214,113 @@ module Ring = struct
     Buffer.contents b
 end
 
+type task = Call of string
+
+module WorkQueue = struct
+  type t = {
+      queue: (Unix.file_descr * task) Queue.t
+    ; mutex: Mutex.t
+    ; condition: Condition.t
+  }
+
+  let create () =
+    let queue = Queue.create () in
+    let mutex = Mutex.create () in
+    let condition = Condition.create () in
+    {queue; mutex; condition}
+end
+
+module Encoding = struct
+  (* For now, only single frames. *)
+  let encode_text_frame s =
+    let l = String.length s in
+    let b = Buffer.create l in
+    (* FIN + Text; single frames only for now. *)
+    Buffer.add_char b '\x81' ;
+    (* Add the mask + length byte, all server -> client frames must be
+       unmasked. *)
+    if l <= 125 then
+      Buffer.add_char b (Char.chr l)
+    else if l >= 126 && l <= 65535 then begin
+      Buffer.add_char b (Char.chr 126) ;
+      Buffer.add_uint16_be b l
+    end else
+      raise (invalid_arg "String too long") ;
+    Buffer.add_string b s ;
+    Buffer.to_bytes b
+end
+
+module Worker = struct
+  let parse_jsonrpc s =
+    try Some (Jsonrpc.version_id_and_call_of_string s) with _ -> None
+
+  let handle_task (fd, task) =
+    match task with
+    | Call str -> (
+      match parse_jsonrpc str with
+      | Some (version, id, call) ->
+          D.debug "Parsed request as: %s" (Jsonrpc.string_of_call call) ;
+          let req =
+            Http.Request.make ~user_agent:"websocket" Http.Post "/jsonrpc"
+          in
+          let a, b = Unix.(socketpair PF_UNIX SOCK_STREAM 0) in
+          let res =
+            (* BEGIN HACK *)
+            (* The problem with using 'b' here is that deeper parts of
+              Xapi may privilege this request, because it looks like the
+              local domain socket. *)
+            Api_server.Server.dispatch_call req b call
+            |> Jsonrpc.string_of_response ~id ~version
+            (* END HACK *)
+          in
+          Unix.(close a ; close b) ;
+          D.debug "Evaluated to: %s" res ;
+          (* Quick prototyping test, this should be queued as a response for the client. *)
+          (* We may self-pipe a notification fd that we pass to each
+            worker, so we can wake epoll when a worker completes work. *)
+          (* For example, we enqueue this as like: { data = bytes, mutable written = 0 }.
+            Then, if our client exists still, we mark it for EPOLLOUT.
+            During epoll out, we try to drain the outgoing ring, e.g.
+            while free_cont out_ring > 0 do
+              front: { data, written } = take from front of queue
+              amount = min (() - front.written) (free_cont out_ring)
+              n = try write .. amount .. with (EAGAIN | EWOULDBLOCK) -> 0
+            done
+
+            We should avoid the worker thread populating the outgoing ring directly.
+            I think it should be the job of the epoll loop to try and
+            shuffle data between the queue of responses and outgoing
+            ring. It may be that each worker receives the client as
+            part of a task, rather than the fd (can query aliveness
+            status + lock and mutate per-client response queue).
+         *)
+          Encoding.encode_text_frame res
+          |> Bytes.to_string
+          |> Xapi_stdext_unix__Unixext.really_write_string
+               fd (* Debugging purposes: client may already be disconnected. *)
+      | _ ->
+          ()
+    )
+
+  let rec work (wq : WorkQueue.t) =
+    Mutex.lock wq.mutex ;
+    while Queue.is_empty wq.queue do
+      Condition.wait wq.condition wq.mutex
+    done ;
+    let task = Queue.take_opt wq.queue in
+    Mutex.unlock wq.mutex ;
+    ( match task with
+    | Some task -> (
+        D.debug "Got some work to do!" ;
+        try handle_task task
+        with e -> D.debug "Worker exception: %s" (Printexc.to_string e)
+      )
+    | _ ->
+        ()
+    ) ;
+    work wq
+end
+
 module Server = struct
   type state =
     | Reading_header of {state: Frame.header Angstrom.Unbuffered.state}
@@ -223,32 +330,37 @@ module Server = struct
       fd: Unix.file_descr
     ; r_ring: Ring.t
     ; mutable state: state
+    ; mutable message_op: Frame.opcode
     ; message: Buffer.t
-    ; mutable alive: bool
+    ; mutable alive: bool Atomic.t
   }
 
   exception Client_eof of client
 
   let create_client fd =
     Unix.set_nonblock fd ;
-    let r_ring = Ring.create (1024 * 1024) in
+    let r_ring = Ring.create (8092 * 2) in
     let state = Angstrom.Unbuffered.parse Parser.parse_header in
     let state = Reading_header {state} in
+    let message_op = Frame.Text in
     let message = Buffer.create 512 in
-    let alive = true in
-    {fd; r_ring; state; message; alive}
+    let alive = Atomic.make true in
+    {fd; r_ring; state; message_op; message; alive}
 
   type t = {
       clients: (Unix.file_descr, client) Hashtbl.t
     ; epoll: Polly.t
     ; mutex: Mutex.t
+    ; queue: WorkQueue.t
   }
 
   let create () =
     let clients = Hashtbl.create 16 in
     let epoll = Polly.create () in
     let mutex = Mutex.create () in
-    {clients; epoll; mutex}
+    let queue = WorkQueue.create () in
+    ignore (Thread.create Worker.work queue : Thread.t) ;
+    {clients; epoll; mutex; queue}
 
   let has_epoll_in es = Polly.Events.(test es inp)
 
@@ -284,12 +396,12 @@ module Server = struct
     match c with
     | Some c ->
         if has_epoll_in es then begin
-          try drain_into_ring c with Client_eof c -> c.alive <- false
+          try drain_into_ring c with Client_eof c -> Atomic.set c.alive false
         end
     | _ ->
         ()
 
-  let advance_state c =
+  let advance_state s c =
     let open Angstrom in
     match c.state with
     | Reading_header {state} -> (
@@ -320,11 +432,14 @@ module Server = struct
           | Fail (_, _, err) ->
               failwith err
           | Done (consumed, hdr) ->
+              D.debug "Received header: %s" (Frame.string_of_header hdr) ;
               ( match hdr.opcode with
               | Unknown _ | Ping | Pong | Binary ->
                   (* TODO: proper handling. *)
                   failwith "Unknown opcode!"
-              | _ ->
+              | Text | Closing ->
+                  c.message_op <- hdr.opcode
+              | Continuation ->
                   ()
               ) ;
               (* BEGIN HACK *)
@@ -374,8 +489,22 @@ module Server = struct
             (* If this payload is the final in a sequence, we've seen an
             entire message. *)
             if hdr.fin then begin
-              let _msg = Buffer.contents c.message in
-              Buffer.reset c.message
+              (* TODO: record which opcode each logical message
+                 started with, as we may buffer a payload to handle a
+                 ping, which should not execute anything. *)
+                let msg = Buffer.contents c.message in
+                if c.message_op = Frame.Text then (
+                  D.debug "Pushing work item: %s" msg ;
+                  Mutex.lock s.queue.mutex ;
+                  Queue.push (c.fd, Call msg) s.queue.queue ;
+                  Mutex.unlock s.queue.mutex ;
+                  Condition.signal s.queue.condition ;
+                  D.debug "Pushed work item"
+                ) else
+                  D.debug "Received non-text (%s) data: %s"
+                    (Frame.string_of_opcode c.message_op)
+                    msg ;
+                Buffer.reset c.message
             end ;
             c.state <-
               Reading_header
@@ -391,7 +520,7 @@ module Server = struct
         let dead, alive =
           Hashtbl.fold
             (fun _ c (dead, alive) ->
-              if c.alive then
+              if Atomic.get c.alive then
                 (dead, c :: alive)
               else
                 (c :: dead, alive)
@@ -421,7 +550,7 @@ module Server = struct
           List.filter
             (fun c ->
               let prev = Ring.used c.r_ring in
-              if prev > 0 then advance_state c ;
+              if prev > 0 then advance_state s c ;
               Ring.used c.r_ring < prev
             )
             !cs ;

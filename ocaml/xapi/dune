@@ -114,6 +114,7 @@
    xapi_main
    server
    api_server
+   xapi_websocket
    xapi
    custom_actions
    context
@@ -292,8 +293,13 @@
  (name xapi_internal_server)
  (modes best)
  (wrapped false)
- (modules api_server xapi)
+ (modules api_server xapi xapi_websocket)
  (libraries
+  sha
+  bigstringaf
+  base64
+  angstrom
+  polly
   clock
   forkexec
   http_lib
