@@ -38,40 +38,34 @@ module Updates (Interface : INTERFACE) = struct
     let empty = {map= M.empty; barriers= []; next= initial + 1}
 
     let add x t =
-      ( {map= M.add x t.next t.map; barriers= t.barriers; next= t.next + 1}
-      , t.next + 1
-      )
+      let map = M.add x t.next t.map in
+      let next = t.next + 1 in
+      ({t with map; next}, next)
 
     let remove x t =
-      ( {map= M.remove x t.map; barriers= t.barriers; next= t.next + 1}
-      , t.next + 1
-      )
+      let map = M.remove x t.map in
+      let next = t.next + 1 in
+      ({t with map; next}, next)
 
     let filter f t =
-      ( {map= M.filter f t.map; barriers= t.barriers; next= t.next + 1}
-      , t.next + 1
-      )
+      let map = M.filter f t.map in
+      let next = t.next + 1 in
+      ({t with map; next}, next)
 
     let inject_barrier id filterfn t =
       let filterfn key _ = filterfn key in
-      ( {
-          map= t.map
-        ; barriers=
-            {bar_id= id; map_s= M.filter filterfn t.map; event_id= t.next}
-            :: t.barriers
-        ; next= t.next + 1
-        }
-      , t.next + 1
-      )
+      let barriers =
+        let map_s = M.filter filterfn t.map in
+        let b = {bar_id= id; map_s; event_id= t.next} in
+        b :: t.barriers
+      in
+      let next = t.next + 1 in
+      ({t with barriers; next}, next)
 
     let remove_barrier id t =
-      ( {
-          map= t.map
-        ; barriers= List.filter (fun br -> br.bar_id <> id) t.barriers
-        ; next= t.next + 1
-        }
-      , t.next + 1
-      )
+      let barriers = List.filter (fun b -> b.bar_id <> id) t.barriers in
+      let next = t.next + 1 in
+      ({t with barriers; next}, next)
 
     let get from t =
       (* [from] is the id of the most recent event already seen *)
