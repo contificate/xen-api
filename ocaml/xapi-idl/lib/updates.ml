@@ -13,103 +13,101 @@ module type INTERFACE = sig
   end
 end
 
+module UpdateRecorder (Ord : Map.OrderedType) = struct
+  (* Map of thing -> last update counter *)
+  module M = Map.Make (Ord)
+
+  type id = int
+
+  (* Type for inner snapshot that we create when injecting a barrier *)
+  type barrier = {
+      bar_id: int  (** This int is a token from outside. *)
+    ; map_s: int M.t  (** Snapshot of main map *)
+    ; event_id: id  (** Snapshot of "next" from when barrier was injected *)
+  }
+
+  type t = {
+      map: int M.t  (** Events with incrementing ids from "next" *)
+    ; barriers: barrier list
+    ; next: id
+  }
+
+  let initial = 0
+
+  let empty = {map= M.empty; barriers= []; next= initial + 1}
+
+  let add x t =
+    let map = M.add x t.next t.map in
+    let next = t.next + 1 in
+    ({t with map; next}, next)
+
+  let remove x t =
+    let map = M.remove x t.map in
+    let next = t.next + 1 in
+    ({t with map; next}, next)
+
+  let filter f t =
+    let map = M.filter f t.map in
+    let next = t.next + 1 in
+    ({t with map; next}, next)
+
+  let inject_barrier id filterfn t =
+    let filterfn key _ = filterfn key in
+    let barriers =
+      let map_s = M.filter filterfn t.map in
+      let b = {bar_id= id; map_s; event_id= t.next} in
+      b :: t.barriers
+    in
+    let next = t.next + 1 in
+    ({t with barriers; next}, next)
+
+  let remove_barrier id t =
+    let barriers = List.filter (fun b -> b.bar_id <> id) t.barriers in
+    let next = t.next + 1 in
+    ({t with barriers; next}, next)
+
+  let get from t =
+    (* [from] is the id of the most recent event already seen *)
+    let get_from_map map =
+      let _before, after = M.partition (fun _ time -> time <= from) map in
+      let xs, last =
+        M.fold
+          (fun key v (acc, m) -> ((key, v) :: acc, max m v))
+          after ([], from)
+      in
+      let xs =
+        List.sort (fun (_, v1) (_, v2) -> compare v1 v2) xs |> List.map fst
+      in
+      (xs, last)
+    in
+    let rec filter_barriers bl acc =
+      match bl with
+      (* Stops at first too-old one, unlike List.filter *)
+      | x :: xs when x.event_id > from ->
+          filter_barriers xs (x :: acc)
+      | _ ->
+          List.rev acc
+    in
+    let recent_b = filter_barriers t.barriers [] in
+    let barriers =
+      List.map (fun br -> (br.bar_id, get_from_map br.map_s |> fst)) recent_b
+    in
+    let rest, last_event = get_from_map t.map in
+    let last =
+      match recent_b with
+      (* assumes recent_b is sorted newest-first *)
+      | [] ->
+          last_event
+      | x :: _ ->
+          max last_event x.event_id
+    in
+    (* Barriers are stored newest-first, reverse to return them in order *)
+    (List.rev barriers, rest, last)
+
+  let last_id t = t.next - 1
+end
+
 module Updates (Interface : INTERFACE) = struct
-  module UpdateRecorder (Ord : Map.OrderedType) = struct
-    (* Map of thing -> last update counter *)
-    module M = Map.Make (Ord)
-
-    type id = int
-
-    (* Type for inner snapshot that we create when injecting a barrier *)
-    type barrier = {
-        bar_id: int  (** This int is a token from outside. *)
-      ; map_s: int M.t  (** Snapshot of main map *)
-      ; event_id: id  (** Snapshot of "next" from when barrier was injected *)
-    }
-
-    type t = {
-        map: int M.t  (** Events with incrementing ids from "next" *)
-      ; barriers: barrier list
-      ; next: id
-    }
-
-    let initial = 0
-
-    let empty = {map= M.empty; barriers= []; next= initial + 1}
-
-    let add x t =
-      let map = M.add x t.next t.map in
-      let next = t.next + 1 in
-      ({t with map; next}, next)
-
-    let remove x t =
-      let map = M.remove x t.map in
-      let next = t.next + 1 in
-      ({t with map; next}, next)
-
-    let filter f t =
-      let map = M.filter f t.map in
-      let next = t.next + 1 in
-      ({t with map; next}, next)
-
-    let inject_barrier id filterfn t =
-      let filterfn key _ = filterfn key in
-      let barriers =
-        let map_s = M.filter filterfn t.map in
-        let b = {bar_id= id; map_s; event_id= t.next} in
-        b :: t.barriers
-      in
-      let next = t.next + 1 in
-      ({t with barriers; next}, next)
-
-    let remove_barrier id t =
-      let barriers = List.filter (fun b -> b.bar_id <> id) t.barriers in
-      let next = t.next + 1 in
-      ({t with barriers; next}, next)
-
-    let get from t =
-      (* [from] is the id of the most recent event already seen *)
-      let get_from_map map =
-        let _before, after = M.partition (fun _ time -> time <= from) map in
-        let xs, last =
-          M.fold
-            (fun key v (acc, m) -> ((key, v) :: acc, max m v))
-            after ([], from)
-        in
-        let xs =
-          List.sort (fun (_, v1) (_, v2) -> compare v1 v2) xs |> List.map fst
-        in
-        (xs, last)
-      in
-      let rec filter_barriers bl acc =
-        match bl with
-        (* Stops at first too-old one, unlike List.filter *)
-        | x :: xs when x.event_id > from ->
-            filter_barriers xs (x :: acc)
-        | _ ->
-            List.rev acc
-      in
-      let recent_b = filter_barriers t.barriers [] in
-      let barriers =
-        List.map (fun br -> (br.bar_id, get_from_map br.map_s |> fst)) recent_b
-      in
-      let rest, last_event = get_from_map t.map in
-      let last =
-        match recent_b with
-        (* assumes recent_b is sorted newest-first *)
-        | [] ->
-            last_event
-        | x :: _ ->
-            max last_event x.event_id
-      in
-      (* Barriers are stored newest-first, reverse to return them in order *)
-      (List.rev barriers, rest, last)
-
-    let last_id t = t.next - 1
-
-    (* let fold f t init = M.fold f t.map init *)
-  end
-
   let with_lock = Xapi_stdext_threads.Threadext.Mutex.execute
 
   module U = UpdateRecorder (struct
