@@ -60,7 +60,7 @@ let database_ready_for_clients_c = Condition.create ()
 
 let database_ready_for_clients_m = Mutex.create ()
 
-let database_ready_for_clients = ref false
+let database_ready_for_clients = ref (Obj.magic 0 : bool)
 
 (* while this is false, client calls will be blocked *)
 
