@@ -182,13 +182,10 @@ let operation (obj : obj) (x : message) =
   in
   let name_default_params, unmarshall_default_params =
     List.mapi
-      (fun param_count default_param ->
+      (fun param_index default_param ->
         let param_name = OU.ocaml_of_record_name default_param.DT.param_name in
         let param_type = OU.alias_of_ty default_param.DT.param_type in
         let param_rpc = to_rpc_name param_name in
-        let try_and_get_default =
-          Printf.sprintf "List.nth default_args %d" param_count
-        in
         let default_value =
           match default_param.DT.param_default with
           | None ->
@@ -196,8 +193,12 @@ let operation (obj : obj) (x : message) =
           | Some default ->
               Datamodel_values.to_ocaml_string default
         in
-        ( Printf.sprintf "let %s = try %s with _ -> %s in" param_rpc
-            try_and_get_default default_value
+        (* A missing or null argument takes its default, so that a later
+           optional argument can be given without supplying the ones before it. *)
+        ( Printf.sprintf
+            "let %s = match List.nth_opt default_args %d with None | Some \
+             Rpc.Null -> %s | Some v -> v in"
+            param_rpc param_index default_value
         , Printf.sprintf "let %s = %s_of_rpc %s in" param_name param_type
             param_rpc
         )
