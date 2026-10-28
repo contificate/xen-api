@@ -190,6 +190,10 @@ let error_message =
   {|
 Clients pass arguments by position, these changes to the datamodel
 have caused breaking changes to the API.
+
+Add new parameters at the end of the list, with a default. If the breaking change is
+intended, update the file with 'dune build @update-api-messages
+--auto-promote' and note this fact in the commit.
 |}
 
 let check_file file =
